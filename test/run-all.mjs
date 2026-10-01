@@ -40,6 +40,9 @@ const TESTS = [
   ['routes-test.mjs', '路由注册 / 页面元素 / 前端 URL 拼接'],
   ['tasks-test.mjs', '任务读取 / 状态归类 / 批量汇总'],
   ['tasks-route-test.mjs', '任务路由 / 领取入口 / 参数校验'],
+  ['i18n-test.mjs', '中英字典 key 对齐 / 占位符一致性'],
+  ['installer-test.mjs', '安装 / 卸载 / 幂等 / 保留他插件配置'],
+  ['history-test.mjs', '签到历史 / 容错 / 聚合去重 / 裁剪'],
 ];
 
 const profile = findProfile();
@@ -68,6 +71,12 @@ for (const f of fs.readdirSync(path.join(PLUGIN_DIR, 'web'))) {
 }
 // package.json 也复制，保证插件以 ESM 解析
 fs.copyFileSync(path.join(PLUGIN_DIR, 'package.json'), path.join(linkDir, 'package.json'));
+
+// scripts/ 也要有 —— installer-test 通过 ../scripts/install.mjs 找它
+fs.mkdirSync(path.join(linkDir, 'scripts'), { recursive: true });
+for (const f of fs.readdirSync(path.join(PLUGIN_DIR, 'scripts'))) {
+  fs.copyFileSync(path.join(PLUGIN_DIR, 'scripts', f), path.join(linkDir, 'scripts', f));
+}
 
 let total = 0;
 let failed = 0;

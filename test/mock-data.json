@@ -1,0 +1,338 @@
+{
+  "/mode": {
+    "ok": true,
+    "mode": "plugin",
+    "plugin": {
+      "online": true,
+      "accountCount": 2,
+      "error": null
+    }
+  },
+  "/overview": {
+    "ok": true,
+    "mode": "plugin",
+    "plugin": {
+      "accounts": [
+        {
+          "id": "bf95abaf1d265893",
+          "label": "acct-one",
+          "nickname": "demo_user_01",
+          "domain": "www.workbuddy.cn",
+          "expiresAt": "2026-11-25T08:59:36.371Z",
+          "disabled": false,
+          "cooling": false,
+          "creditReserve": 0,
+          "credits": {
+            "total": 2390,
+            "packages": [
+              {
+                "packageName": "CodeBuddy Personal Trial",
+                "remain": 490,
+                "size": 500
+              },
+              {
+                "packageName": "Referral pack",
+                "remain": 1500,
+                "size": 1500
+              }
+            ]
+          },
+          "checkin": {
+            "active": true,
+            "todayCheckedIn": true,
+            "streakDays": 1,
+            "dailyCredit": 100,
+            "todayCredit": 100
+          }
+        },
+        {
+          "id": "137e65f8f6f95b64",
+          "label": "acct-two",
+          "nickname": "demo_user_02",
+          "domain": "www.codebuddy.cn",
+          "expiresAt": "2026-11-25T08:35:58.401Z",
+          "disabled": false,
+          "cooling": false,
+          "creditReserve": 100,
+          "credits": {
+            "total": 2872,
+            "packages": [
+              {
+                "packageName": "CodeBuddy Personal Trial",
+                "remain": 500,
+                "size": 500
+              },
+              {
+                "packageName": "Growth pack",
+                "remain": 621,
+                "size": 3000
+              }
+            ]
+          },
+          "checkin": {
+            "active": true,
+            "todayCheckedIn": false,
+            "streakDays": 2,
+            "dailyCredit": 100,
+            "todayCredit": 100
+          }
+        }
+      ],
+      "distribution": "round-robin",
+      "cooling": 0,
+      "region": "cn",
+      "models": [
+        {
+          "id": "deepseek-v4.1-flash",
+          "multiplier": 0.11
+        },
+        {
+          "id": "glm-5.3-flash",
+          "multiplier": 0.06
+        },
+        {
+          "id": "glm-5.3",
+          "multiplier": 0.79
+        },
+        {
+          "id": "hy4-preview",
+          "multiplier": 0.29
+        },
+        {
+          "id": "kimi-k3-1",
+          "multiplier": 1.62
+        },
+        {
+          "id": "minimax-m3",
+          "multiplier": 0.25
+        }
+      ],
+      "selection": {
+        "enabledModelIds": [
+          "deepseek-v4.1-flash",
+          "glm-5.3-flash"
+        ]
+      },
+      "automation": {
+        "enabled": false,
+        "running": true,
+        "checkinHours": [
+          9
+        ],
+        "taskHours": [
+          11
+        ],
+        "reportHours": [
+          10
+        ],
+        "streakHours": [
+          12
+        ],
+        "travelHours": [
+          9,
+          21
+        ],
+        "jobs": {
+          "checkin": {
+            "ok": 2,
+            "credit": 200
+          },
+          "tasks": {
+            "credit": 600,
+            "energy": 20,
+            "claimed": 4
+          },
+          "travel": {
+            "credit": 150
+          }
+        },
+        "earningsToday": {
+          "a1": {
+            "credit": 950
+          }
+        },
+        "runInProgress": false
+      }
+    }
+  },
+  "/tasks": {
+    "ok": true,
+    "totals": {
+      "accounts": 2,
+      "pendingTasks": 3,
+      "claimableTasks": 1,
+      "pendingCredit": 350,
+      "claimableCredit": 100
+    },
+    "accounts": [
+      {
+        "uid": "a1",
+        "nickname": "demo_user_01",
+        "ok": true,
+        "summary": {
+          "total": 18,
+          "pendingCredit": 200,
+          "claimableCredit": 100
+        },
+        "claimable": [
+          {
+            "taskCode": "Expert_team_use_3",
+            "title": "Summon 3 expert teams",
+            "state": "claimable",
+            "current": 3,
+            "target": 3,
+            "percent": 100,
+            "credit": 100,
+            "energy": 5,
+            "_uid": "a1"
+          }
+        ],
+        "pending": [
+          {
+            "taskCode": "Model_chat_GLM5.2",
+            "title": "Try the GLM-5.2 model",
+            "state": "pending",
+            "current": 0,
+            "target": 1,
+            "percent": 0,
+            "credit": 100,
+            "energy": 5,
+            "_uid": "a1"
+          },
+          {
+            "taskCode": "black_cat",
+            "title": "Night-owl discount event",
+            "state": "pending",
+            "current": 1,
+            "target": 3,
+            "percent": 33,
+            "credit": 100,
+            "energy": 5,
+            "_uid": "a1"
+          }
+        ]
+      },
+      {
+        "uid": "a2",
+        "nickname": "demo_user_02",
+        "ok": true,
+        "summary": {
+          "total": 18,
+          "pendingCredit": 150,
+          "claimableCredit": 0
+        },
+        "claimable": [],
+        "pending": [
+          {
+            "taskCode": "wb_wechat_oa_subscribe_task",
+            "title": "Follow the official account",
+            "state": "pending",
+            "current": 0,
+            "target": 1,
+            "percent": 0,
+            "credit": 150,
+            "energy": 5,
+            "_uid": "a2"
+          }
+        ]
+      }
+    ]
+  },
+  "/history": {
+    "ok": true,
+    "windowDays": 30,
+    "totalRecords": 42,
+    "series": [
+      {
+        "day": "2026-09-22",
+        "credit": 3100,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": null
+      },
+      {
+        "day": "2026-09-23",
+        "credit": 3250,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 150
+      },
+      {
+        "day": "2026-09-24",
+        "credit": 3250,
+        "accounts": 2,
+        "checkedIn": 1,
+        "delta": 0
+      },
+      {
+        "day": "2026-09-25",
+        "credit": 3600,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 350
+      },
+      {
+        "day": "2026-09-26",
+        "credit": 3720,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 120
+      },
+      {
+        "day": "2026-09-27",
+        "credit": 4100,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 380
+      },
+      {
+        "day": "2026-09-28",
+        "credit": 4250,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 150
+      },
+      {
+        "day": "2026-09-29",
+        "credit": 4250,
+        "accounts": 2,
+        "checkedIn": 1,
+        "delta": 0
+      },
+      {
+        "day": "2026-09-30",
+        "credit": 4800,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 550
+      },
+      {
+        "day": "2026-10-01",
+        "credit": 5262,
+        "accounts": 2,
+        "checkedIn": 2,
+        "delta": 462
+      }
+    ],
+    "accounts": [
+      {
+        "uid": "a1",
+        "nickname": "demo_user_01",
+        "firstDay": "2026-09-22",
+        "lastDay": "2026-10-01",
+        "observedDays": 10,
+        "checkedInDays": 10,
+        "lastCredit": 2390
+      },
+      {
+        "uid": "a2",
+        "nickname": "demo_user_02",
+        "firstDay": "2026-09-22",
+        "lastDay": "2026-10-01",
+        "observedDays": 10,
+        "checkedInDays": 9,
+        "lastCredit": 2872
+      }
+    ]
+  }
+}

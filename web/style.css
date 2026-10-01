@@ -168,4 +168,49 @@ main { max-width: 1120px; margin: 0 auto; padding: 24px; display: flex; flex-dir
   .task .treward { margin-left: 0; }
 }
 
+/* —— 签到历史 —— */
+
+.select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chart-wrap { padding: 8px 18px 4px; }
+.chart { width: 100%; height: 120px; display: block; overflow: visible; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-area { fill: var(--accent); opacity: .12; }
+.chart circle { fill: var(--accent); }
+.chart circle:hover { r: 4; fill: var(--ok); }
+.chart-axis {
+  display: flex; justify-content: space-between;
+  color: var(--muted); font-size: 11px; padding: 2px 0 0;
+}
+
+.hist-head {
+  padding: 12px 18px 4px;
+  font-size: 12px; color: var(--muted);
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.hist-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 7px 18px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.hist-row + .hist-row { border-top: 1px solid rgba(42, 47, 58, .5); }
+.hist-row .hday { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); min-width: 92px; }
+.hist-row .hcredit { font-weight: 600; min-width: 70px; }
+.hist-row .hacct { color: var(--muted); font-size: 12px; min-width: 90px; }
+.hist-row .delta { font-size: 12px; margin-left: auto; }
+.delta.up { color: var(--ok); }
+.delta.down { color: var(--bad); }
+
+
 

@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }} · ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 20 是最低支持版本；22/24 覆盖当前主流
+        node: ['20', '22', '24']
+        os: [ubuntu-latest, windows-latest]
+        exclude:
+          # Windows 上只跑一个版本，省 CI 时间（路径问题在 windows-latest 已能覆盖）
+          - os: windows-latest
+            node: '22'
+          - os: windows-latest
+            node: '24'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 没有第三方依赖需要安装 —— 插件本身零运行时依赖，
+      # 测试只用 node: 内置模块。这一步顺带验证了 package.json 里
+      # 没有意外引入依赖。
+      - name: 校验 package.json
+        run: node -e "const p=require('./package.json'); if(!p.name||!p.version||!p.main) process.exit(1); console.log('OK', p.name, p.version)"
+
+      - name: 语法检查
+        run: node --check lib/index.js && node --check lib/tasks.mjs && node --check lib/account-check.mjs && node --check web/app.js && node --check scripts/install.mjs
+
+      - name: 运行测试
+        run: node test/run-ci.mjs
+
+      - name: 校验字典产物是最新的
+        run: |
+          node scripts/build-dict.mjs
+          node -e "
+            const fs = require('fs');
+            const a = fs.readFileSync('web/i18n.js', 'utf8');
+            const b = fs.readFileSync('web/i18n-dict.js', 'utf8');
+            // i18n-dict.js 必须由 i18n.js 生成；直接比对 key 集合
+            const keys = (s) => (s.match(/^  '([^']+)':/gm) || []).sort().join('|');
+            if (keys(a) !== keys(b)) {
+              console.error('web/i18n-dict.js 与 web/i18n.js 不同步，请运行 node scripts/build-dict.mjs');
+              process.exit(1);
+            }
+            console.log('字典产物同步 OK');
+          "
+
+  lint-readme:
+    name: 检查 README 引用的文件存在
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: README 里的相对链接必须存在
+        run: |
+          node -e "
+            const fs = require('fs');
+            const md = fs.readFileSync('README.md', 'utf8');
+            // 抓 markdown 图片与链接里的相对路径
+            const refs = [...md.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)]
+              .map(m => m[1])
+              .filter(p => !/^https?:|^#|^mailto:/.test(p));
+            let bad = 0;
+            for (const r of refs) {
+              const clean = r.split('#')[0];
+              if (!clean) continue;
+              if (!fs.existsSync(clean)) { console.error('缺失: ' + clean); bad++; }
+            }
+            if (bad) process.exit(1);
+            console.log('README 引用的 ' + refs.length + ' 个文件都存在');
+          "

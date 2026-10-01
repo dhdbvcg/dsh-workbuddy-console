@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>WorkBuddy 账号管理器 · XD Pool</title>
+<title>WorkBuddy Console</title>
 <link rel="stylesheet" href="/wb-console/style.css" />
 </head>
 <body>
@@ -11,18 +11,19 @@
   <div class="brand">
     <span class="logo">WB</span>
     <div>
-      <h1>WorkBuddy 账号管理器</h1>
-      <p class="sub" id="mode-line">连接中…</p>
+      <h1 data-i18n="app.title">WorkBuddy 账号管理器</h1>
+      <p class="sub" id="mode-line" data-i18n="app.subtitle.connecting">连接中…</p>
     </div>
   </div>
   <div class="actions">
+    <button id="btn-lang" class="btn btn-sm" title="Switch language / 切换语言">中 / EN</button>
     <button id="btn-claim-all" class="btn btn-primary" disabled>
-      <span class="ico">⚡</span> 一键全部签到
+      <span class="ico">⚡</span> <span data-i18n="btn.claimAll">一键全部签到</span>
     </button>
-    <button id="btn-check" class="btn">检查账号</button>
-    <button id="btn-login" class="btn">登录新账号</button>
-    <button id="btn-rescan" class="btn">重扫账号</button>
-    <button id="btn-refresh" class="btn">刷新</button>
+    <button id="btn-check" class="btn" data-i18n="btn.check">检查账号</button>
+    <button id="btn-login" class="btn" data-i18n="btn.login">登录新账号</button>
+    <button id="btn-rescan" class="btn" data-i18n="btn.rescan">重扫账号</button>
+    <button id="btn-refresh" class="btn" data-i18n="btn.refresh">刷新</button>
   </div>
 </header>
 
@@ -30,51 +31,53 @@
   <div id="banner" class="banner hidden"></div>
   <div id="alert" class="alert hidden"></div>
 
-  <!-- 账号体检结果 -->
+  <!-- 账号体检结果 / account check -->
   <section class="panel hidden" id="check-panel">
     <div class="panel-head">
-      <h2>账号检查</h2>
+      <h2 data-i18n="check.title">账号检查</h2>
       <span class="hint" id="check-time"></span>
     </div>
     <div id="check-body"></div>
   </section>
 
   <section id="summary" class="summary hidden">
-    <div class="stat"><span class="k">账号总数</span><b id="s-total">0</b></div>
-    <div class="stat ok"><span class="k">本次签到成功</span><b id="s-claimed">0</b></div>
-    <div class="stat"><span class="k">今日已签</span><b id="s-already">0</b></div>
-    <div class="stat bad"><span class="k">失败</span><b id="s-failed">0</b></div>
-    <div class="stat gain"><span class="k">本次共获得</span><b id="s-credit">0</b><span class="unit">积分</span></div>
+    <div class="stat"><span class="k" data-i18n="summary.total">账号总数</span><b id="s-total">0</b></div>
+    <div class="stat ok"><span class="k" data-i18n="summary.claimed">本次签到成功</span><b id="s-claimed">0</b></div>
+    <div class="stat"><span class="k" data-i18n="summary.already">今日已签</span><b id="s-already">0</b></div>
+    <div class="stat bad"><span class="k" data-i18n="summary.failed">失败</span><b id="s-failed">0</b></div>
+    <div class="stat gain"><span class="k" data-i18n="summary.credit">本次共获得</span><b id="s-credit">0</b><span class="unit" data-i18n="summary.unit">积分</span></div>
   </section>
 
-  <!-- 未完成任务 -->
+  <!-- 未完成任务 / pending tasks -->
   <section class="panel" id="tasks-panel">
     <div class="panel-head">
-      <h2>未完成任务</h2>
+      <h2 data-i18n="tasks.title">未完成任务</h2>
       <div class="chips">
         <span class="badge warn" id="tasks-pending-badge">—</span>
         <span class="badge gain" id="tasks-credit-badge">—</span>
-        <button class="btn btn-sm" id="btn-tasks">刷新任务</button>
+        <button class="btn btn-sm" id="btn-tasks" data-i18n="btn.tasks">刷新任务</button>
       </div>
     </div>
-    <div id="tasks-body"><p class="hint" style="padding:0 18px 14px">点「刷新任务」读取各账号的成长任务进度。</p></div>
+    <div id="tasks-body">
+      <p class="hint" style="padding:0 18px 14px" data-i18n="tasks.hint">点「刷新任务」读取各账号的成长任务进度。</p>
+    </div>
   </section>
 
   <section class="panel">
     <div class="panel-head">
-      <h2>账号池</h2>
+      <h2 data-i18n="pool.title">账号池</h2>
       <div class="chips" id="pool-chips"></div>
     </div>
     <div id="list" class="list"></div>
     <div id="empty" class="empty hidden">
-      <p>没有发现账号。</p>
-      <p class="hint">请先在 WorkBuddy 桌面端登录，然后点「重扫账号」。</p>
+      <p data-i18n="empty.title">没有发现账号。</p>
+      <p class="hint" data-i18n="empty.hint">请先在 WorkBuddy 桌面端登录，然后点「重扫账号」。</p>
     </div>
   </section>
 
   <section class="panel" id="automation-panel">
     <div class="panel-head">
-      <h2>自动化任务</h2>
+      <h2 data-i18n="auto.title">自动化任务</h2>
       <span class="hint" id="auto-state"></span>
     </div>
     <div class="jobs" id="jobs"></div>
@@ -83,52 +86,71 @@
 
   <section class="panel" id="models-panel">
     <div class="panel-head">
-      <h2>模型池</h2>
-      <button class="btn btn-sm" id="btn-models-refresh">刷新目录</button>
+      <h2 data-i18n="models.title">模型池</h2>
+      <button class="btn btn-sm" id="btn-models-refresh" data-i18n="btn.modelsRefresh">刷新目录</button>
     </div>
     <div id="models" class="models"></div>
   </section>
+
+  <!-- 签到历史 / history -->
+  <section class="panel" id="history-panel">
+    <div class="panel-head">
+      <h2 data-i18n="history.title">签到历史</h2>
+      <div class="chips">
+        <select id="history-days" class="select" title="Range">
+          <option value="7">7</option>
+          <option value="30" selected>30</option>
+          <option value="90">90</option>
+        </select>
+        <button class="btn btn-sm" id="btn-history" data-i18n="btn.history">刷新历史</button>
+        <button class="btn btn-sm btn-danger" id="btn-history-clear" data-i18n="btn.clearHistory">清空</button>
+      </div>
+    </div>
+    <div id="history-body">
+      <p class="hint" style="padding:0 18px 14px" data-i18n="history.hint">点「刷新历史」查看积分趋势。每次签到与打开页面都会自动记一笔。</p>
+    </div>
+  </section>
 </main>
 
-<!-- 保底积分弹窗 -->
+<!-- 保底积分弹窗 / credit floor -->
 <div id="modal" class="modal hidden">
   <div class="modal-box">
-    <h3>设置保底积分</h3>
+    <h3 data-i18n="reserve.title">设置保底积分</h3>
     <p class="hint" id="reserve-target"></p>
-    <label>当账号积分低于该值时停止使用它（0 = 不限制）</label>
+    <label data-i18n="reserve.label">当账号积分低于该值时停止使用它（0 = 不限制）</label>
     <input id="f-reserve" type="number" min="0" step="1" value="0" />
     <div class="modal-actions">
-      <button id="btn-cancel" class="btn">取消</button>
-      <button id="btn-save" class="btn btn-primary">保存</button>
+      <button id="btn-cancel" class="btn" data-i18n="btn.cancel">取消</button>
+      <button id="btn-save" class="btn btn-primary" data-i18n="btn.save">保存</button>
     </div>
   </div>
 </div>
 
-<!-- 登录弹窗 -->
+<!-- 登录弹窗 / sign-in -->
 <div id="login-modal" class="modal hidden">
   <div class="modal-box">
-    <h3>登录新的 WorkBuddy 账号</h3>
-    <p class="hint">
-      登录必须由你本人在浏览器里完成（官方用的是交互式 OAuth），
-      本工具不会存储或代填你的账号密码。
-    </p>
+    <h3 data-i18n="login.title">登录新的 WorkBuddy 账号</h3>
+    <p class="hint" data-i18n="login.hint">登录必须由你本人在浏览器里完成（官方用的是交互式 OAuth），本工具不会存储或代填你的账号密码。</p>
     <div class="login-choices">
       <button class="btn login-choice" id="btn-login-web">
-        <b>打开官网登录页</b>
-        <span class="hint">在浏览器里登录 WorkBuddy 网页版，登录后回来点「重扫账号」</span>
+        <b data-i18n="login.web">打开官网登录页</b>
+        <span class="hint" data-i18n="login.webHint">在浏览器里登录 WorkBuddy 网页版，登录后回来点「重扫账号」</span>
       </button>
       <button class="btn login-choice" id="btn-login-desktop">
-        <b>拉起 WorkBuddy 桌面版</b>
-        <span class="hint">桌面版已登录时会重新写出登录文件，无需再输密码</span>
+        <b data-i18n="login.desktop">拉起 WorkBuddy 桌面版</b>
+        <span class="hint" data-i18n="login.desktopHint">桌面版已登录时会重新写出登录文件，无需再输密码</span>
       </button>
     </div>
     <p class="hint" id="login-result"></p>
     <div class="modal-actions">
-      <button id="btn-login-cancel" class="btn">关闭</button>
+      <button id="btn-login-cancel" class="btn" data-i18n="btn.close">关闭</button>
     </div>
   </div>
 </div>
 
+<!-- 顺序不能反：先字典，再运行时，最后业务 -->
+<script src="/wb-console/i18n-dict.js"></script>
+<script src="/wb-console/i18n-runtime.js"></script>
 <script src="/wb-console/app.js"></script>
 </body>
 </html>

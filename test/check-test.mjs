@@ -38,10 +38,15 @@ await t('tokenExpiryMs 返回毫秒', () => {
 
 console.log('\n凭证文件扫描（真实本机）');
 
+// CI 上没有 WorkBuddy 凭证文件，这类用例跳过而不是失败 ——
+// 它们验证的是「本机安装是否正常」，不是代码逻辑。
+const NO_CREDS = process.env.WB_CI === '1' && ac.scanCredentialFiles().length === 0;
+
 await t('扫描到本机凭证文件', () => {
   const files = ac.scanCredentialFiles();
   console.log('       扫描到 ' + files.length + ' 个文件');
   for (const f of files) console.log('         [' + f.kind + '] ' + f.file + ' -> ' + (f.nickname || f.uid));
+  if (NO_CREDS) return console.log('       (CI 环境无凭证文件，跳过断言)');
   assert.ok(files.length > 0, '应至少扫到一个凭证文件');
 });
 
@@ -52,6 +57,14 @@ await t('每个文件都带 kind / path / accessToken 字段', () => {
     assert.ok(typeof f.path === 'string' && f.path.length > 0);
     assert.ok(typeof f.accessToken === 'string');
   }
+});
+
+await t('扫描结果结构正确（不依赖是否有凭证）', () => {
+  const files = ac.scanCredentialFiles();
+  assert.ok(Array.isArray(files), '应返回数组');
+  // 目录不存在时也必须安全返回空数组，而不是抛异常
+  const none = ac.scanCredentialFiles({ WORKBUDDY_AUTH_FILE: '/nonexistent/xyz', LOCALAPPDATA: '/nope', APPDATA: '/nope2' });
+  assert.ok(Array.isArray(none), '无凭证时应返回空数组');
 });
 
 await t('登出标记被识别到凭证上', () => {

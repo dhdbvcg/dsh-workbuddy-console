@@ -1,10 +1,12 @@
 # dsh-workbuddy-console
 
 **WorkBuddy 多账号控制台** —— 一个跑在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 里的网页，
-用来管理多个 WorkBuddy 账号、一键领取所有账号的积分，并查看未完成的任务。
+用来管理多个 WorkBuddy 账号、一键领取所有账号的积分，并查看还剩什么没做完。
 
 页面挂在 **DSH 自己的 webServer** 上，所以只要 DSH 在跑，页面就在 ——
 不需要额外启动进程，也不会有「拒绝连接」。
+
+[English](README.en.md)
 
 ![界面](assets/console.png)
 
@@ -16,10 +18,12 @@
 | **未完成任务** | 列出还没做完的成长任务：进度条、还差多少、能拿多少积分；达标的可一键领取 |
 | **账号检查** | 逐个账号**实时调上游**验证登录态，区分「有效 / 已失效 / 无法确认」 |
 | **登录新账号** | 打开官网登录页 / 拉起桌面版两个入口，不存储、不代填密码 |
+| **签到历史** | 每次签到与打开页面自动记一笔，按 7/30/90 天绘制积分趋势图 |
 | 账号池 | 昵称、连签天数、今日状态、各积分包余额、冷却与保底状态 |
 | 自动化任务 | 5 个任务的今日收益与计划时间，可手动触发 |
 | 模型池 | 模型列表与积分倍率 |
 | 账号操作 | 签到、启用/禁用、设置保底积分 |
+| **中英双语** | 界面可切换，右上角「中 / EN」 |
 
 ## 快速开始
 
@@ -33,10 +37,26 @@
 ### 安装
 
 ```bash
-cd <你的 DSH profile 目录>        # 例如 ~/.dsh/profiles/desktop
+git clone https://github.com/dhdbvcg/dsh-workbuddy-console.git
+cd dsh-workbuddy-console
+node scripts/install.mjs
 ```
 
-在 `package.json` 的 `dependencies` 里加一行：
+安装脚本会自动定位 DSH profile、注册插件、并以正确的 `link:` 形式写入依赖。
+然后**重启 DSH**。
+
+可选参数：
+
+```bash
+node scripts/install.mjs --dry-run          # 只看会做什么，不改文件
+node scripts/install.mjs --profile <目录>   # 指定 profile
+node scripts/install.mjs --uninstall        # 卸载注册
+```
+
+<details>
+<summary>手动安装（不想跑脚本时）</summary>
+
+在 profile 的 `package.json` 的 `dependencies` 里加：
 
 ```jsonc
 "dsh-workbuddy-console": "link:/绝对路径/dsh-workbuddy-console"
@@ -50,13 +70,9 @@ cd <你的 DSH profile 目录>        # 例如 ~/.dsh/profiles/desktop
       name: dsh-workbuddy-console
 ```
 
-然后：
+然后 `pnpm install`。
 
-```bash
-pnpm install
-```
-
-最后**重启 DSH**。
+</details>
 
 ### 访问
 
@@ -88,6 +104,7 @@ DSH 端口就是你平时打开 GUI 的端口。
 - **登录态真假难辨**：本地 auth 文件里的 `expiresAt` 会被上游撤销而**不更新**，
   所以「显示未过期」不等于「还能用」。唯一可信的检查是真的发一次请求。
 - **没有一个总览页面**：这些信息散在设置卡片、日志和 CLI 里。
+- **没有历史**：所有信息都是「当前状态」，昨天的数字就没有了。
 
 ## 和 xdpool 的关系
 
@@ -101,8 +118,8 @@ DSH 端口就是你平时打开 GUI 的端口。
 |---|---|
 | 账号发现、签到、积分、任务、模型目录、自动化 | xdpool |
 | 一键全部签到（批量） | **本插件补齐** |
-| 未完成任务视图、账号体检、登录入口 | **本插件新增** |
-| 网页界面 | **本插件提供** |
+| 未完成任务视图、账号体检、登录入口、历史趋势 | **本插件新增** |
+| 网页界面、中英双语 | **本插件提供** |
 
 账号凭证始终由 xdpool 管理，本插件只读本机 auth 文件，**不落盘、不外发**。
 
@@ -139,6 +156,20 @@ DSH 端口就是你平时打开 GUI 的端口。
 taskCode 走 **PATH** 而非 body，且必须带 growth-center 的 `Origin`/`Referer`
 和 `x-client-platform: web`。
 
+## 签到历史
+
+每次签到与每次打开页面，都会把当时的快照追加到本地 JSONL
+（`<DSH 根目录>/plugin-data/dsh-workbuddy-console/history.jsonl`）。
+
+两个刻意的设计：
+
+- **用 JSONL 而不是 JSON 数组** —— 追加写入不必读全量再重写整个文件；
+  写入被中断最多丢最后一行，不会把已有历史全毁掉。
+- **同一天同一账号只取最后一次快照** —— 反复刷新页面不能把总数刷大。
+  如果直接求和会严重重复计数。
+
+保留 90 天 / 5000 条，每次签到后自动裁剪。数据不出本机。
+
 ## 关于「自动登录」
 
 **做不到全自动，这是上游设计使然。**
@@ -161,6 +192,8 @@ WorkBuddy 使用交互式浏览器 OAuth（Keycloak，域 `www.codebuddy.cn`）�
 | `DSH_HOME` | `~/.dsh` | DSH 根目录 |
 | `WORKBUDDY_XDPOOL_ENTRY` | — | 直接指定 xdpool 的 `lib/index.js` 绝对路径 |
 | `WORKBUDDY_AUTH_FILE` | 自动探测 | 指定 WorkBuddy auth 文件或目录 |
+| `WB_CONSOLE_DATA_DIR` | `<DSH>/plugin-data/...` | 历史数据的存放目录 |
+| `WB_CONSOLE_HISTORY_DAYS` | `90` | 历史保留天数 |
 
 ## API
 
@@ -175,6 +208,9 @@ WorkBuddy 使用交互式浏览器 OAuth（Keycloak，域 `www.codebuddy.cn`）�
 | GET | `/wb-console/api/tasks` | 未完成任务（`?all=1` 含已完成） |
 | POST | `/wb-console/api/tasks/claim` | 领取单个任务奖励 |
 | GET | `/wb-console/api/accounts/check` | 账号体检 |
+| GET | `/wb-console/api/history` | 签到历史（`?days=7\|30\|90`） |
+| POST | `/wb-console/api/history/prune` | 裁剪历史 |
+| POST | `/wb-console/api/history/clear` | 清空历史 |
 | POST | `/wb-console/api/accounts/disabled` | 启用/禁用账号 |
 | POST | `/wb-console/api/accounts/credit-reserve` | 保底积分 |
 | POST | `/wb-console/api/accounts/rescan` | 重扫账号 |
@@ -186,22 +222,27 @@ WorkBuddy 使用交互式浏览器 OAuth（Keycloak，域 `www.codebuddy.cn`）�
 ## 开发
 
 ```bash
-node test/run-all.mjs     # 全部单测
+node test/run-all.mjs     # 全部单测（会切到 DSH profile 以解析 xdpool）
+node test/run-ci.mjs      # CI 跑的那套（不需要 profile 与真实凭证）
+node scripts/build-dict.mjs   # 由 web/i18n.js 生成 web/i18n-dict.js
 ```
 
 | 文件 | 项数 | 覆盖 |
 |---|---|---|
 | `selftest.mjs` | 19 | 插件形状、路由、静态资源、代理、批量签到、通用转发 |
-| `check-test.mjs` | 18 | JWT、凭证扫描、探活判定、体检汇总、登录域名白名单 |
+| `check-test.mjs` | 19 | JWT、凭证扫描、探活判定、体检汇总、登录域名白名单 |
 | `routes-test.mjs` | 12 | 路由注册、页面元素、前端 URL 拼接 |
 | `tasks-test.mjs` | 7 | 任务读取、状态归类、批量汇总、失败隔离 |
 | `tasks-route-test.mjs` | 9 | 任务路由、领取参数校验、uid 白名单 |
+| `i18n-test.mjs` | 3 | 中英字典 key 对齐、占位符一致、无空值 |
+| `installer-test.mjs` | 13 | 安装 / 卸载 / 幂等 / 保留其它插件配置 |
+| `history-test.mjs` | 16 | 记录、容错、同日去重、裁剪 |
 
-浏览器端到端测试（需要 DSH 在跑）：
+浏览器端到端（需要 Chrome；`e2e-i18n.mjs` 不依赖 DSH）：
 
 ```bash
-node test/e2e-check.mjs   # 点「检查账号」「登录新账号」，断言零 JS 异常
-node test/e2e-tasks.mjs   # 点「刷新任务」，断言任务面板渲染正确
+node test/e2e-i18n.mjs    # 中英两种语言渲染，断言零 JS 异常 + 折线图已画出
+node test/screenshot.mjs  # 重新生成 assets/ 里的截图
 ```
 
 ### 为什么测试由 `run-all.mjs` 驱动

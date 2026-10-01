@@ -35,34 +35,46 @@ await t('导出 pendingTasks / tasksForCredential', () => {
 
 console.log('\n真实数据（读本机账号的 growth 任务）');
 
-// 构造凭证：从本机 auth 文件读
+// 构造凭证：从本机 auth 文件读。
+// CI 上没有这个目录，所以必须容忍缺失（否则 readdirSync 会直接抛异常，
+// 让整个测试文件崩溃，而不是干净地跳过）。
 const DIR = path.join(os.homedir(), 'AppData', 'Local', 'CodeBuddyExtension', 'Data', 'Public', 'auth');
-const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.info'));
-const creds = files.map((f) => {
-  const j = JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'));
-  return {
-    uid: j.account.uid,
-    nickname: j.account.nickname,
-    credential: {
+let creds = [];
+try {
+  const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.info'));
+  creds = files.map((f) => {
+    const j = JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'));
+    return {
       uid: j.account.uid,
-      uin: j.account.uin,
       nickname: j.account.nickname,
-      domain: j.auth.domain,
-      accessToken: j.auth.accessToken,
-      refreshToken: j.auth.refreshToken,
-    },
-  };
-});
+      credential: {
+        uid: j.account.uid,
+        uin: j.account.uin,
+        nickname: j.account.nickname,
+        domain: j.auth.domain,
+        accessToken: j.auth.accessToken,
+        refreshToken: j.auth.refreshToken,
+      },
+    };
+  });
+} catch {
+  creds = [];
+}
+
+const NO_CREDS = creds.length === 0;
+if (NO_CREDS) console.log('  (无本机凭证，真实数据用例将跳过)');
 
 await t('至少有一个凭证可测', () => {
+  if (NO_CREDS) return console.log('       (跳过：无本机凭证)');
   assert.ok(creds.length > 0, '本机没有凭证');
 });
 
 let live = null;
 await t('能读到任务列表并正确归类', async () => {
+  if (NO_CREDS) return console.log('       (跳过：无本机凭证)');
   const r = await mod.tasksForCredential(creds[0].credential);
   if (!r.ok) {
-    // 网络不通时跳过而不是假装通过
+    // 网络不通 / 插件缺失时跳过而不是假装通过
     console.log('      (跳过：' + r.error + ')');
     return;
   }
@@ -97,7 +109,9 @@ await t('claimable 任务的 current >= target 且未领取', () => {
 });
 
 await t('pendingTasks 批量汇总正确', async () => {
-  const out = await mod.pendingTasks(creds.slice(0, 2));
+  // 无凭证时仍应返回合法结构（空汇总），不抛异常
+  const input = NO_CREDS ? [] : creds.slice(0, 2);
+  const out = await mod.pendingTasks(input);
   assert.equal(out.ok, true);
   assert.ok(Array.isArray(out.accounts));
   if (live) {
@@ -111,10 +125,12 @@ await t('pendingTasks 批量汇总正确', async () => {
 await t('单个账号失败不影响其它账号', async () => {
   const bad = {
     uid: 'bad-uid',
-    nickname: '坏账号',
+    nickname: 'BadAccount',
     credential: { uid: 'bad-uid', domain: 'www.codebuddy.cn', accessToken: 'invalid.token.here' },
   };
-  const out = await mod.pendingTasks([creds[0], bad]);
+  // 用一个好凭证 + 一个坏凭证（无凭证时只用坏的，同样能验证隔离性）
+  const input = NO_CREDS ? [bad] : [creds[0], bad];
+  const out = await mod.pendingTasks(input);
   assert.equal(out.ok, true);
   const badRow = out.accounts.find((a) => a.uid === 'bad-uid');
   assert.ok(badRow && badRow.ok === false, '坏账号应标记为失败');

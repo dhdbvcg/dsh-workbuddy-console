@@ -1,0 +1,6 @@
+# Register the WorkBuddy account console. It serves its own page on the DSH
+# webserver, so the console is reachable at /wb-console whenever DSH runs —
+# no separate process and no separate port to start by hand.
+- insert:
+    - id: workbuddy-console
+      name: dsh-workbuddy-console

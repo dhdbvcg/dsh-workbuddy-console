@@ -1,0 +1,70 @@
+{
+  "name": "dsh-workbuddy-console",
+  "version": "1.0.0",
+  "description": "WorkBuddy account console for DeepSeek Harness: multi-account overview, one-click daily check-in for every account, pending growth tasks, login-health checks, live credits, automation jobs and the model pool. Serves its page on the DSH webserver, so it is available whenever DSH runs.",
+  "license": "MIT",
+  "author": "dhdbvcg",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "web",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "workbuddy",
+    "codebuddy",
+    "account-manager",
+    "multi-account",
+    "checkin",
+    "daily-checkin",
+    "credits",
+    "dashboard"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhdbvcg/dsh-workbuddy-console.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dhdbvcg/dsh-workbuddy-console/issues"
+  },
+  "homepage": "https://github.com/dhdbvcg/dsh-workbuddy-console#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/run-all.mjs",
+    "test:e2e": "node test/e2e-check.mjs && node test/e2e-tasks.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.1-rc.1 <0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "dsh-workbuddy-xdpool": ">=1.7.0"
+  },
+  "dependenciesMeta": {
+    "dsh-workbuddy-xdpool": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

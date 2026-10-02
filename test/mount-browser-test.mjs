@@ -58,6 +58,15 @@ window.__boot_error = null;
       return realFetch.apply(window, arguments);
     };
 
+    // 记录 Enter 派发（验证「使用」技能的回车模拟）
+    window.__enterSeen = false;
+    var OrigKeyboardEvent = window.KeyboardEvent;
+    window.KeyboardEvent = function (type, opts) {
+      if (type === 'keydown' && opts && opts.key === 'Enter') window.__enterSeen = true;
+      return new OrigKeyboardEvent(type, opts);
+    };
+    window.KeyboardEvent.prototype = OrigKeyboardEvent.prototype;
+
     var mod = null;
     var declared = [];
     var registered = {};
@@ -87,6 +96,7 @@ window.__boot_error = null;
           if (name === 'react/jsx-runtime') return jsxRuntime;
           throw new Error('unexpected require ' + name);
         });
+        window.__WB_MODULE__ = mod;
         declared = mod.inject || [];
         mod.apply(ctx);
       }
@@ -229,6 +239,42 @@ const ev = async (expr) => {
 };
 
 const raw = await ev('JSON.stringify(window.__RESULT__)');
+
+// 主题与调用路径的专项检查（在页面上下文里跑 __internals）
+const themeAndInvoke = await ev(`(async () => {
+  const out = {};
+  try {
+    // 找到已加载的模块（__ModuleLoader__ 捕获的最后一次 factory 产物）
+    const mod = window.__WB_MODULE__;
+    if (!mod) return { error: 'module not captured' };
+    const { detectTheme, invokeSkill, findComposerInput } = mod.__internals;
+
+    // 1) 主题检测：深色标记 → dark；浅色标记 → light
+    document.documentElement.setAttribute('data-theme', 'dark');
+    out.themeDark = detectTheme();
+    document.documentElement.setAttribute('data-theme', 'light');
+    out.themeLight = detectTheme();
+    document.documentElement.removeAttribute('data-theme');
+
+    // 2) DOM 调用：造一个假 textarea，验证「使用」会写入 /技能名 并派发回车
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'position:fixed;left:0;bottom:0;width:400px;height:60px;';
+    document.body.appendChild(ta);
+    const res = await invokeSkill(null, 'demo-skill');
+    out.invokeOk = res.ok;
+    out.invokeVia = res.via;
+    out.written = ta.value;
+    out.enterDispatched = !!window.__enterSeen;
+    ta.remove();
+  } catch (e) {
+    out.error = String(e && e.message || e);
+  }
+  return out;
+})()`);
+
+// 让页面能拿到模块：boot 时存到 window.__WB_MODULE__
+// （PAGE 里的 __ModuleLoader__.load 已在运行；这里补一行说明——实际捕获见 PAGE 修改）
+
 let bad = 0;
 console.log('=== 浏览器挂载结果 ===');
 if (!raw) {
@@ -270,6 +316,25 @@ if (!raw) {
     console.log('\n--- 积分条（workbuddy-credit）---');
     if (r3.error) { console.log('  ✗', r3.error); bad++; }
     else console.log('  ✓ 挂载成功（无数据时为空是预期）');
+
+    console.log('\n--- 主题与调用路径 ---');
+    if (!themeAndInvoke || themeAndInvoke.error) {
+      console.log('  ✗ 专项检查失败:', themeAndInvoke && themeAndInvoke.error);
+      bad++;
+    } else {
+      if (themeAndInvoke.themeDark === 'dark') console.log('  ✓ 深色标记 → dark');
+      else { console.log('  ✗ 深色检测错:', themeAndInvoke.themeDark); bad++; }
+      if (themeAndInvoke.themeLight === 'light') console.log('  ✓ 浅色标记 → light（浅色模式→白色界面）');
+      else { console.log('  ✗ 浅色检测错:', themeAndInvoke.themeLight); bad++; }
+      if (themeAndInvoke.invokeOk && themeAndInvoke.invokeVia === 'dom' && String(themeAndInvoke.written).includes('/demo-skill')) {
+        console.log('  ✓ 「使用」把 /技能名 写进了输入框（DOM 方案）');
+      } else {
+        console.log('  ✗ 调用失败:', JSON.stringify(themeAndInvoke));
+        bad++;
+      }
+      if (themeAndInvoke.enterDispatched) console.log('  ✓ 模拟了 Enter 提交');
+      else { console.log('  ✗ 没有派发 Enter'); bad++; }
+    }
   }
 }
 

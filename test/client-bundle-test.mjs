@@ -223,12 +223,21 @@ t('包含 ui-settings（它拥有 settings.section）', () => {
 
 console.log('\n源码卫生');
 
-t('使用 command() 调用技能（DSH 原生命令接口）', () => {
-  assert.match(clientSrc, /\.command\(/, '应通过 composer 的 command() 调用技能');
+t('使用 command() 调用技能（DSH 原生命令接口，若宿主提供）', () => {
+  assert.match(clientSrc, /\.command\(/, '应优先尝试 composer 的 command()');
 });
 
-t('拿不到 command 时如实告知，不假装成功', () => {
-  assert.match(clientSrc, /useUnavailable|no-command/, '应有「无法自动调用」的分支');
+t('command 拿不到时走 DOM 方案：写入输入框 + 模拟回车', () => {
+  // renderSlot('conversation.input.left', {}) 传空 props，宿主不给 command；
+  // 退路是把 /技能名 写进 composer 并派发 Enter —— 等价用户手打。
+  assert.match(clientSrc, /findComposerInput/, '应从 DOM 找输入框');
+  assert.match(clientSrc, /insertIntoInput/, '应写入输入框');
+  assert.match(clientSrc, /pressEnter/, '应模拟回车提交');
+});
+
+t('找不到输入框时如实告知，不假装成功', () => {
+  assert.match(clientSrc, /no-input/, '应有 no-input 分支');
+  assert.match(clientSrc, /noInput/, '应有「找不到输入框」文案');
 });
 
 t('样式只注入一次（按 id 去重）', () => {

@@ -3,6 +3,35 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.6] - 2026-10-02
+
+### 修复
+
+- **「使用」技能真正生效。**
+
+  实测宿主对 `conversation.input.left` 的 `renderSlot` 传**空 props** ——
+  `command()` 永远是 undefined，v1.4.5 的调用路径从未生效。
+
+  现在改为 **DOM 方案**：从页面找输入框（textarea 优先、contenteditable
+  其次，取视口最底部的一个），把 `/技能名` 写进去（React 受控组件走原生
+  setter + input 事件），再模拟回车提交。等价于用户手打 `/技能名`，
+  走 DSH 原生的用户显式技能调用（技能正文会作为 instructions 注入对话）。
+  宿主将来若真的暴露 `command()`，仍优先走它。
+
+- **弹层与设置页跟随主题。**
+
+  新增 `detectTheme()`：读 `data-theme`/class 标记 → body 背景色亮度 →
+  系统偏好，逐级回退。所有 UI（设置页、选择器浮层、按钮、提示）分
+  `dsh-wbc-light`（白底深字）与 `dsh-wbc-dark`（深底浅字）两套配色，
+  打开弹层时重新检测。
+
+### 测试
+
+- `mount-browser-test.mjs` 增至 5 项：新增主题检测双向断言
+  （dark 标记→dark、light 标记→light）、
+  「使用」写入 `/demo-skill` 到输入框、Enter 已派发。
+- 测试 204 项全绿。
+
 ## [1.4.5] - 2026-10-02
 
 ### 修复

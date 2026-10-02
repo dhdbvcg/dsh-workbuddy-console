@@ -43,6 +43,12 @@ const TESTS = [
   ['i18n-test.mjs', '中英字典 key 对齐 / 占位符一致性'],
   ['installer-test.mjs', '安装 / 卸载 / 幂等 / 保留他插件配置'],
   ['history-test.mjs', '签到历史 / 容错 / 聚合去重 / 裁剪'],
+  ['credit-test.mjs', '积分采集 / SSE 解析 / 流旁听透传'],
+  ['credit-samples-test.mjs', '余额差值 / 消耗与入账分离 / 窗口过滤'],
+  ['proxy-test.mjs', '计费代理 / 字节透传 / 白名单 / 错误透传'],
+  ['manifest-test.mjs', 'package.json 与 DSH 加载协议一致性'],
+  ['skill-market-test.mjs', '技能市场 / 路径安全 / frontmatter / 卸载'],
+  ['client-bundle-test.mjs', '客户端 bundle / 插槽注册 / inject 覆盖'],
 ];
 
 const profile = findProfile();
@@ -78,6 +84,13 @@ for (const f of fs.readdirSync(path.join(PLUGIN_DIR, 'scripts'))) {
   fs.copyFileSync(path.join(PLUGIN_DIR, 'scripts', f), path.join(linkDir, 'scripts', f));
 }
 
+// cordis.patch.yml 与 README 等根文件：manifest-test 会检查它们是否存在
+// （漏拷会让测试报出「文件不存在」，那是测试环境的假阳性）
+for (const f of ['cordis.patch.yml', 'README.md', 'README.en.md', 'LICENSE', 'CHANGELOG.md']) {
+  const src = path.join(PLUGIN_DIR, f);
+  if (fs.existsSync(src)) fs.copyFileSync(src, path.join(linkDir, f));
+}
+
 let total = 0;
 let failed = 0;
 const rows = [];
@@ -91,7 +104,19 @@ for (const [file, desc] of TESTS) {
   }
   fs.writeFileSync(path.join(linkDir, 'test', file), fs.readFileSync(src));
 
-  const r = spawnSync(process.execPath, [path.join('test', file)], { cwd: linkDir, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [path.join('test', file)], {
+    cwd: linkDir,
+    encoding: 'utf8',
+    // 关键：把数据目录指到临时位置。
+    // 否则像 credit-samples 这类测试会写进用户真实的 ~/.dsh ——
+    // 之前就是这样污染了用户的余额历史（多了 11 条 uid=a 的假记录）。
+    env: {
+      ...process.env,
+      WB_CONSOLE_DATA_DIR: path.join(linkDir, 'test-data'),
+      WB_CONSOLE_HISTORY_DAYS: '7',
+      WB_CI: process.env.WB_CI || '1',
+    },
+  });
   const out = (r.stdout || '') + (r.stderr || '');
   const m = out.match(/结果：(\d+) 通过，(\d+) 失败/);
   if (m) {

@@ -338,9 +338,12 @@ await t('批量签到：插件状态查询失败时提前返回，不误报成�
 console.log('\n通用转发');
 
 await t('POST 转发到插件成功', async () => {
-  let seen = null;
+  // 注意：插件启动时会异步轮询 /status 绑定 shim 地址，
+  // 所以不能用一个「最后一次请求」变量 —— 会把轮询当成转发结果。
+  // 这里只记录目标路径。
+  let forwarded = null;
   const { server, port } = await fakePool((url, method, body) => {
-    seen = { url, method, body };
+    if (url.includes('accounts/disabled')) forwarded = { url, method, body };
     return { status: 200, body: { ok: true, accountId: body.accountId, disabled: body.disabled } };
   });
   try {
@@ -349,8 +352,9 @@ await t('POST 转发到插件成功', async () => {
     await routes.get('/wb-console/api/accounts/disabled').handler(postReq({ accountId: 'p1', disabled: true }), res);
     const j = JSON.parse(res.out.body);
     assert.equal(j.ok, true);
-    assert.match(seen.url, /accounts\/disabled/);
-    assert.equal(seen.method, 'POST');
+    assert.ok(forwarded, '转发请求未到达插件');
+    assert.match(forwarded.url, /accounts\/disabled/);
+    assert.equal(forwarded.method, 'POST');
   } finally {
     server.close();
   }

@@ -755,6 +755,182 @@ $('#btn-history-clear').addEventListener('click', async () => {
   await loadHistory();
 });
 
+/* —— 积分消耗 —— */
+
+function renderSpend(r) {
+  const body = $('#spend-body');
+
+  if (!r.samples || r.samples === 0) {
+    body.innerHTML = `<p class="hint" style="padding:0 18px 14px">${t('spend.empty')}</p>`;
+    return;
+  }
+
+  const stats = `
+    <div class="check-stats">
+      <div class="check-stat bad"><span class="k">${t('spend.spent')}</span><b>${fmtNum(r.spent)}</b></div>
+      <div class="check-stat ok"><span class="k">${t('spend.gained')}</span><b>${fmtNum(r.gained)}</b></div>
+      <div class="check-stat"><span class="k">${t('spend.net')}</span><b>${r.net >= 0 ? '+' : ''}${fmtNum(r.net)}</b></div>
+    </div>`;
+
+  const rows = (r.perAccount || [])
+    .map(
+      (a) => `<div class="hist-row">
+        <span class="hday">${esc(a.nickname || a.uid)}</span>
+        <span class="hacct">${t('spend.accountRow', { spent: fmtNum(a.spent), gained: fmtNum(a.gained), credit: fmtNum(a.lastCredit) })}</span>
+      </div>`,
+    )
+    .join('');
+
+  body.innerHTML =
+    stats +
+    `<div class="hist-head">${t('spend.samples', { count: r.samples, days: r.spanDays || r.days })}</div>` +
+    rows +
+    `<p class="hint" style="padding:0 18px 14px">${t('spend.note')}</p>`;
+}
+
+async function loadSpend() {
+  $('#btn-spend').textContent = t('btn.tasksLoading');
+  $('#btn-spend').disabled = true;
+  try {
+    // 先采一次样再读汇总，保证「刷新消耗」立刻反映当前余额
+    await api('POST', '/api/credit/sample');
+    const days = Number($('#spend-days').value) || 7;
+    const r = await api('GET', '/api/credit/summary?days=' + days);
+    if (!r.ok) {
+      $('#spend-body').innerHTML = `<p class="hint" style="padding:0 18px 14px">${esc(r.error || t('msg.loadFailed'))}</p>`;
+      return;
+    }
+    state.spend = r;
+    renderSpend(r);
+  } finally {
+    $('#btn-spend').textContent = t('btn.spend');
+    $('#btn-spend').disabled = false;
+  }
+}
+
+$('#btn-spend').addEventListener('click', loadSpend);
+$('#spend-days').addEventListener('change', loadSpend);
+
+/* —— 技能市场 —— */
+
+/** 当前语言下技能该显示的名字 / 描述 */
+function skillName(s) {
+  return WB_I18N.lang() === 'zh' ? s.displayNameZh || s.name : s.displayNameEn || s.name;
+}
+function skillDesc(s) {
+  return WB_I18N.lang() === 'zh' ? s.descriptionZh || '' : s.descriptionEn || '';
+}
+
+function skillRow(s, installedSet) {
+  const installed = installedSet.has(s.name);
+  const nameOk = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s.name);
+  const desc = skillDesc(s);
+
+  return `
+    <div class="skill-row">
+      <div class="skill-meta">
+        <div class="skill-name">
+          ${esc(skillName(s))}
+          <span class="tcode">${esc(s.name)}</span>
+          ${installed ? `<span class="badge ok">${t('skills.installed')}</span>` : ''}
+          ${!nameOk ? `<span class="badge bad">${t('skills.invalidName')}</span>` : ''}
+        </div>
+        <div class="skill-desc">${esc(desc.slice(0, 220))}${desc.length > 220 ? '…' : ''}</div>
+        <div class="skill-foot">
+          <span class="tcode">v${esc(s.version || '?')}</span>
+          <span class="tcode">${esc((s.categories || []).join(' · '))}</span>
+          <span class="tcode">${t('skills.uses', { count: fmtNum(s.useCount) })}</span>
+        </div>
+      </div>
+      <div class="skill-actions">
+        ${
+          installed
+            ? `<button class="btn btn-sm btn-danger act-skill-del" data-name="${esc(s.name)}">${t('skills.uninstall')}</button>
+               <button class="btn btn-sm act-skill-add" data-id="${esc(s.skillId)}" data-name="${esc(s.name)}" data-version="${esc(s.version || '')}" data-ow="1">${t('skills.overwrite')}</button>`
+            : `<button class="btn btn-sm btn-primary act-skill-add" data-id="${esc(s.skillId)}" data-name="${esc(s.name)}" data-version="${esc(s.version || '')}" ${nameOk ? '' : 'disabled'}>${t('skills.install')}</button>`
+        }
+      </div>
+    </div>`;
+}
+
+function renderSkills(r) {
+  const body = $('#skills-body');
+  const installedSet = new Set(r.installed || []);
+  const skills = r.skills || [];
+
+  if (skills.length === 0) {
+    body.innerHTML = `<p class="hint" style="padding:0 18px 14px">${t('skills.empty')}</p>`;
+    return;
+  }
+
+  body.innerHTML =
+    `<div class="hist-head">${t('skills.total', { total: fmtNum(r.total || 0), installed: installedSet.size })}</div>` +
+    skills.map((s) => skillRow(s, installedSet)).join('') +
+    `<p class="hint" style="padding:0 18px 14px">${t('skills.dir', { dir: esc(r.skillsDir || '') })}<br>${t('skills.restartHint')}</p>`;
+}
+
+async function loadSkills() {
+  $('#btn-skills').textContent = t('skills.loading');
+  $('#btn-skills').disabled = true;
+  try {
+    const kw = $('#skills-search').value.trim();
+    const q = new URLSearchParams({ page: '1', pageSize: '30' });
+    if (kw) q.set('keyword', kw);
+    const r = await api('GET', '/api/skills/list?' + q.toString());
+    if (!r.ok) {
+      $('#skills-body').innerHTML = `<p class="hint" style="padding:0 18px 14px">${esc(r.error || t('msg.loadFailed'))}</p>`;
+      return;
+    }
+    state.skills = r;
+    renderSkills(r);
+  } finally {
+    $('#btn-skills').textContent = t('btn.skills');
+    $('#btn-skills').disabled = false;
+  }
+}
+
+$('#btn-skills').addEventListener('click', loadSkills);
+$('#skills-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') loadSkills();
+});
+
+$('#skills-body').addEventListener('click', async (e) => {
+  const addBtn = e.target.closest('.act-skill-add');
+  if (addBtn) {
+    const name = addBtn.dataset.name;
+    const orig = addBtn.textContent;
+    addBtn.disabled = true;
+    addBtn.textContent = t('skills.installing');
+    try {
+      const r = await api('POST', '/api/skills/install', {
+        skillId: addBtn.dataset.id,
+        name,
+        version: addBtn.dataset.version,
+        overwrite: addBtn.dataset.ow === '1',
+      });
+      if (r.ok === false) flash(r.error || t('msg.operationFailed'));
+      else flash(t('skills.installedAt', { name, files: r.files, size: (r.bytes / 1024).toFixed(1) + ' KB' }), 'ok');
+    } finally {
+      addBtn.disabled = false;
+      addBtn.textContent = orig;
+      await loadSkills();
+    }
+    return;
+  }
+
+  const delBtn = e.target.closest('.act-skill-del');
+  if (delBtn) {
+    const name = delBtn.dataset.name;
+    if (!confirm(t('msg.confirmDelete') + '\n' + name)) return;
+    delBtn.disabled = true;
+    delBtn.textContent = t('skills.uninstalling');
+    const r = await api('POST', '/api/skills/uninstall', { name });
+    if (r.ok === false) flash(r.error || t('msg.operationFailed'));
+    else flash(t('skills.uninstalledAt', { name }), 'ok');
+    await loadSkills();
+  }
+});
+
 /* —— 语言切换 —— */
 
 $('#btn-lang').addEventListener('click', () => {
@@ -771,6 +947,9 @@ window.onLangChanged = function () {
   }
   if (state.check) renderCheck(state.check);
   if (state.tasks) renderTasks(state.tasks);
+  if (state.history) renderHistory(state.history);
+  if (state.spend) renderSpend(state.spend);
+  if (state.skills) renderSkills(state.skills);
   load();
 };
 
@@ -780,3 +959,5 @@ window.onLangChanged = function () {
 document.documentElement.lang = WB_I18N.lang() === 'zh' ? 'zh-CN' : 'en';
 WB_I18N.applyI18n(document);
 load();
+// 消耗面板独立加载：它需要先采样再汇总，比概览慢，不该拖住首屏
+loadSpend();

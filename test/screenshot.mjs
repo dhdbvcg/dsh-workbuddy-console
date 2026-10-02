@@ -94,11 +94,15 @@ for (const [lang, name] of [['zh', 'console.png'], ['en', 'console.en.png']]) {
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/wb-console/?lang=${lang}&t=${Date.now()}` });
   await new Promise((r) => setTimeout(r, 4000));
 
-  // 3. 展开任务与历史面板
+  // 3. 展开各面板（任务 / 历史 / 消耗 / 技能市场）
   await send('Runtime.evaluate', { expression: `document.querySelector('#btn-tasks')?.click()` });
   await new Promise((r) => setTimeout(r, 1500));
   await send('Runtime.evaluate', { expression: `document.querySelector('#btn-history')?.click()` });
-  await new Promise((r) => setTimeout(r, 1800));
+  await new Promise((r) => setTimeout(r, 1500));
+  await send('Runtime.evaluate', { expression: `document.querySelector('#btn-spend')?.click()` });
+  await new Promise((r) => setTimeout(r, 1500));
+  await send('Runtime.evaluate', { expression: `document.querySelector('#btn-skills')?.click()` });
+  await new Promise((r) => setTimeout(r, 2500));
 
   // 4. 截图（整页）
   const metrics = await send('Page.getLayoutMetrics');

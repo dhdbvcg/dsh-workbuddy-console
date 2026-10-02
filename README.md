@@ -19,6 +19,10 @@
 | **账号检查** | 逐个账号**实时调上游**验证登录态，区分「有效 / 已失效 / 无法确认」 |
 | **登录新账号** | 打开官网登录页 / 拉起桌面版两个入口，不存储、不代填密码 |
 | **签到历史** | 每次签到与打开页面自动记一笔，按 7/30/90 天绘制积分趋势图 |
+| **积分消耗** | 按余额差值统计消耗与入账（24h/7/30 天） |
+| **技能市场** | 浏览 WorkBuddy 技能市场（10000+ 技能），一键安装到 DSH 技能目录 |
+| **输入框技能选择器** | 对话输入框左侧的 WorkBuddy 按钮，点选已装技能即调用 |
+| **DSH 设置页** | 设置 → WorkBuddy 技能市场，搜索/安装/卸载（不用开控制台页） |
 | 账号池 | 昵称、连签天数、今日状态、各积分包余额、冷却与保底状态 |
 | 自动化任务 | 5 个任务的今日收益与计划时间，可手动触发 |
 | 模型池 | 模型列表与积分倍率 |
@@ -170,6 +174,114 @@ taskCode 走 **PATH** 而非 body，且必须带 growth-center 的 `Origin`/`Ref
 
 保留 90 天 / 5000 条，每次签到后自动裁剪。数据不出本机。
 
+## 积分消耗是怎么算的
+
+**关键区别**，先讲清楚避免误解：
+
+| 口径 | 需要什么 | 精度 |
+|---|---|---|
+| **本页显示的消耗** | 只采样余额，无需改任何链路 | 账号级 / 时间段级 |
+| **单次对话消耗** | 需让模型流量经过计费代理 | 精确到每次请求 |
+
+### 为什么「消耗」不等于「余额下降」
+
+余额会因为**签到、任务奖励**上升，也会因为**对话**下降。
+如果只算净值，签到 +100 后又花了 30，会被记成「增加 70」——完全错。
+
+所以本插件把两者**分开累计**：下降部分记为消耗，上升部分记为入账，净值单独展示。
+
+### 单次对话的精确值：上游其实直接给了
+
+实测发现（不是推测）：WorkBuddy 的 SSE 流最后一个 usage 帧带 **`credit` 字段**，
+就是这次请求的真实计费值：
+
+| 模型 | 倍率 | token | `credit` |
+|---|---|---|---|
+| glm-5.3-flash | x0.06 | 33 | 0 |
+| glm-5.3 | x0.79 | 33 | 0.01 |
+| kimi-k3-1 | x1.62 | 106 | 0.08 |
+
+所以**不需要用 token × 倍率估算** —— 估算会有缓存命中、推理 token、倍率单位三个
+不确定项，而上游给的是账单真值。
+
+`lib/credit-meter.mjs` 与 `lib/billing-proxy.mjs` 已经实现完整采集（19 + 13 项测试），
+但默认**不启用**：它要求模型流量经过代理，而那会动到模型链路。
+需要时可在配置里开启 `creditMeter`。当前页面上显示的是余额差值口径。
+
+## 技能市场
+
+控制台里可以直接浏览 **WorkBuddy 技能市场**（实测 10000+ 技能），一键装进 DSH。
+
+### 装到哪里、怎么生效
+
+```
+<DSH 根目录>/skills/<技能名>/SKILL.md
+```
+
+`dsh-skill-filesystem` 会扫描并 **watch** 这个目录，所以装完 DSH 下次读目录就能看到，
+**不需要重启**（若没出现，重启一次即可）。
+
+### 为什么能直接兼容
+
+实测下载一个技能包，内容是标准结构 —— 与 DSH 的要求完全一致：
+
+```
+SKILL.md          YAML frontmatter（name / description / allowed-tools…）+ 正文
+reference.md      可选参考资料
+scripts/*         可选脚本
+workbuddy.json    WorkBuddy 自己的元数据
+```
+
+上游的 `SKILL.md` frontmatter 已带 `name` 与 `description`，正是 DSH 的必需字段，
+所以**不需要做任何格式转换**。
+
+### 安全处理
+
+安装会往磁盘写文件，所以做了这些校验：
+
+| 检查 | 原因 |
+|---|---|
+| 技能名必须 kebab-case | 不符合 DSH 命名规则的目录不会被发现，装了也白装 |
+| 解压路径必须在目标目录内 | zip 里的 `../` 或绝对路径会导致**任意文件写入** |
+| 下载 ≤30MB、解压 ≤50MB | 防 zip 炸弹 |
+| 先解压到临时目录，再原子改名 | 失败不会留下半个技能 |
+| 卸载只允许删 `skills/` 的直接子目录 | 防路径穿越删错东西 |
+
+### 上游接口
+
+| 用途 | 接口 |
+|---|---|
+| 列表 | `POST /v2/operation-platform/market/skill/list` |
+| 详情 | `POST /v2/operation-platform/market/skill/get-by-ids` |
+| 下载地址 | `POST /v2/operation-platform/market/skill/download-url` |
+
+## 在 DSH 里使用技能
+
+装好的技能有两个入口：
+
+### 1. 输入框的技能选择器
+
+对话输入框左侧有一个 **⚡ WorkBuddy** 按钮：
+
+1. 点开 → 列出所有**已安装**的技能（可筛选）
+2. 点某个技能的「使用」→ 在本对话中调用它
+
+调用方式走的是 DSH 自己暴露给输入框的 `command(line)` 接口，
+等价于你手打 `/<技能名>`，所以行为和 DSH 原生命令一致。
+
+> 若某个宿主的输入框没有暴露 `command`，按钮会**如实提示**
+> 「无法自动调用」，而不是静默失败。
+
+### 2. 设置页
+
+**设置 → WorkBuddy 技能市场**：搜索、安装、卸载，不用切到控制台页面。
+
+### 为什么需要自己写选择器
+
+DSH 内置的技能 UI（`dsh-client-ui-skill`）**只注册了 `tool.call.toolview`**
+—— 它只负责把技能工具的调用结果渲染成一行摘要，**没有选择器**。
+所以「选一个技能去用」这个能力是本插件新增的。
+
 ## 关于「自动登录」
 
 **做不到全自动，这是上游设计使然。**
@@ -192,8 +304,9 @@ WorkBuddy 使用交互式浏览器 OAuth（Keycloak，域 `www.codebuddy.cn`）�
 | `DSH_HOME` | `~/.dsh` | DSH 根目录 |
 | `WORKBUDDY_XDPOOL_ENTRY` | — | 直接指定 xdpool 的 `lib/index.js` 绝对路径 |
 | `WORKBUDDY_AUTH_FILE` | 自动探测 | 指定 WorkBuddy auth 文件或目录 |
-| `WB_CONSOLE_DATA_DIR` | `<DSH>/plugin-data/...` | 历史数据的存放目录 |
+| `WB_CONSOLE_DATA_DIR` | `<DSH>/plugin-data/...` | 历史与余额样本的存放目录 |
 | `WB_CONSOLE_HISTORY_DAYS` | `90` | 历史保留天数 |
+| `WB_CONSOLE_CREDIT_DAYS` | `90` | 余额样本保留天数 |
 
 ## API
 
@@ -211,6 +324,14 @@ WorkBuddy 使用交互式浏览器 OAuth（Keycloak，域 `www.codebuddy.cn`）�
 | GET | `/wb-console/api/history` | 签到历史（`?days=7\|30\|90`） |
 | POST | `/wb-console/api/history/prune` | 裁剪历史 |
 | POST | `/wb-console/api/history/clear` | 清空历史 |
+| GET | `/wb-console/api/credit` | 会话级积分（需计费代理） |
+| GET | `/wb-console/api/credit/summary` | 消耗/入账汇总（`?days=1\|7\|30`） |
+| POST | `/wb-console/api/credit/sample` | 立即采一次余额样本 |
+| POST | `/wb-console/api/credit/clear` | 清空余额样本 |
+| GET | `/wb-console/api/skills/list` | 技能市场列表（`?page&pageSize&keyword`） |
+| GET | `/wb-console/api/skills/installed` | 本地已安装技能 |
+| POST | `/wb-console/api/skills/install` | 安装技能到 DSH 技能目录 |
+| POST | `/wb-console/api/skills/uninstall` | 卸载技能 |
 | POST | `/wb-console/api/accounts/disabled` | 启用/禁用账号 |
 | POST | `/wb-console/api/accounts/credit-reserve` | 保底积分 |
 | POST | `/wb-console/api/accounts/rescan` | 重扫账号 |
@@ -237,11 +358,19 @@ node scripts/build-dict.mjs   # 由 web/i18n.js 生成 web/i18n-dict.js
 | `i18n-test.mjs` | 3 | 中英字典 key 对齐、占位符一致、无空值 |
 | `installer-test.mjs` | 13 | 安装 / 卸载 / 幂等 / 保留其它插件配置 |
 | `history-test.mjs` | 16 | 记录、容错、同日去重、裁剪 |
+| `credit-test.mjs` | 19 | SSE 解析、跨 chunk 拼接、流旁听字节透传、累加 |
+| `credit-samples-test.mjs` | 15 | 余额差值、消耗与入账分离、抖动去重、窗口过滤 |
+| `proxy-test.mjs` | 13 | 计费代理字节透传、白名单、错误透传、上游不可达 |
+| `manifest-test.mjs` | 9 | package.json 与 DSH 加载协议一致性 |
+| `skill-market-test.mjs` | 22 | 路径穿越防护、frontmatter 解析、卸载、上游错误 |
+| `client-bundle-test.mjs` | 15 | 客户端 bundle 加载、插槽注册、inject 覆盖 |
+
+共 **196 项**。
 
 浏览器端到端（需要 Chrome；`e2e-i18n.mjs` 不依赖 DSH）：
 
 ```bash
-node test/e2e-i18n.mjs    # 中英两种语言渲染，断言零 JS 异常 + 折线图已画出
+node test/e2e-i18n.mjs    # 中英渲染，断言零 JS 异常 + 折线图 + 消耗面板
 node test/screenshot.mjs  # 重新生成 assets/ 里的截图
 ```
 

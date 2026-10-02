@@ -212,5 +212,24 @@ main { max-width: 1120px; margin: 0 auto; padding: 24px; display: flex; flex-dir
 .delta.up { color: var(--ok); }
 .delta.down { color: var(--bad); }
 
+/* —— 技能市场 —— */
+
+#skills-search { min-width: 180px; font-family: inherit; }
+
+.skill-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 12px 18px;
+  border-top: 1px solid rgba(42, 47, 58, .5);
+}
+.skill-row .skill-meta { flex: 1; min-width: 0; }
+.skill-row .skill-name {
+  font-weight: 600; font-size: 13px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.skill-row .skill-desc { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
+.skill-row .skill-foot { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 5px; }
+.skill-row .skill-actions { display: flex; gap: 6px; flex: none; align-items: center; }
+
+
 
 

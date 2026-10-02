@@ -92,6 +92,38 @@
     <div id="models" class="models"></div>
   </section>
 
+  <!-- 技能市场 / skill market -->
+  <section class="panel" id="skills-panel">
+    <div class="panel-head">
+      <h2 data-i18n="skills.title">WorkBuddy 技能市场</h2>
+      <div class="chips">
+        <input id="skills-search" class="select" type="search" data-i18n-placeholder="skills.searchPlaceholder" placeholder="搜索技能…" />
+        <button class="btn btn-sm" id="btn-skills" data-i18n="btn.skills">加载市场</button>
+      </div>
+    </div>
+    <div id="skills-body">
+      <p class="hint" style="padding:0 18px 14px" data-i18n="skills.hint">点「加载市场」浏览 WorkBuddy 技能市场；安装后 DSH 会自动发现，无需重启。</p>
+    </div>
+  </section>
+
+  <!-- 积分消耗 / credit usage -->
+  <section class="panel" id="spend-panel">
+    <div class="panel-head">
+      <h2 data-i18n="spend.title">积分消耗</h2>
+      <div class="chips">
+        <select id="spend-days" class="select" title="Range">
+          <option value="1">24h</option>
+          <option value="7" selected>7</option>
+          <option value="30">30</option>
+        </select>
+        <button class="btn btn-sm" id="btn-spend" data-i18n="btn.spend">刷新消耗</button>
+      </div>
+    </div>
+    <div id="spend-body">
+      <p class="hint" style="padding:0 18px 14px" data-i18n="spend.hint">打开页面时会自动采样余额，这里按时间差值统计消耗与入账。</p>
+    </div>
+  </section>
+
   <!-- 签到历史 / history -->
   <section class="panel" id="history-panel">
     <div class="panel-head">

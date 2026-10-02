@@ -27,6 +27,12 @@ const TESTS = [
   ['i18n-test.mjs', '中英字典 key 对齐 / 占位符一致性'],
   ['installer-test.mjs', '安装 / 卸载 / 幂等 / 保留他插件配置'],
   ['history-test.mjs', '签到历史 / 容错 / 聚合去重 / 裁剪'],
+  ['credit-test.mjs', '积分采集 / SSE 解析 / 流旁听透传'],
+  ['credit-samples-test.mjs', '余额差值 / 消耗与入账分离 / 窗口过滤'],
+  ['proxy-test.mjs', '计费代理 / 字节透传 / 白名单 / 错误透传'],
+  ['manifest-test.mjs', 'package.json 与 DSH 加载协议一致性'],
+  ['skill-market-test.mjs', '技能市场 / 路径安全 / frontmatter / 卸载'],
+  ['client-bundle-test.mjs', '客户端 bundle / 插槽注册 / inject 覆盖'],
   ['check-test.mjs', 'JWT / 凭证扫描 / 探活判定 / 体检 / 登录白名单'],
   ['tasks-test.mjs', '任务读取 / 状态归类 / 批量汇总'],
 ];

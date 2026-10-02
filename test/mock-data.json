@@ -334,5 +334,126 @@
         "lastCredit": 2872
       }
     ]
+  },
+  "/credit/summary": {
+    "ok": true,
+    "days": 7,
+    "samples": 26,
+    "spanDays": 5,
+    "spent": 412.5,
+    "gained": 900,
+    "net": 487.5,
+    "perAccount": [
+      {
+        "uid": "a1",
+        "nickname": "demo_user_01",
+        "firstCredit": 2100,
+        "lastCredit": 2390,
+        "samples": 13,
+        "spent": 210,
+        "gained": 500,
+        "firstTs": 0,
+        "lastTs": 0
+      },
+      {
+        "uid": "a2",
+        "nickname": "demo_user_02",
+        "firstCredit": 2450,
+        "lastCredit": 2872,
+        "samples": 13,
+        "spent": 202.5,
+        "gained": 400,
+        "firstTs": 0,
+        "lastTs": 0
+      }
+    ]
+  },
+  "/skills/list": {
+    "ok": true,
+    "page": 1,
+    "pageSize": 30,
+    "total": 10000,
+    "skillsDir": "C:\\\\Users\\\\demo\\\\.dsh\\\\skills",
+    "installed": [
+      "xlsx"
+    ],
+    "skills": [
+      {
+        "skillId": "skill_1",
+        "name": "delivery-no-pseudoblock",
+        "version": "1.0.0",
+        "displayNameZh": "AI交付前全自动自检技能",
+        "displayNameEn": "AI Pre-Delivery Self-Check",
+        "descriptionZh": "AI交付前全自动自检技能。任何一次向用户交付结果之前，必须实际加载并实跑本技能，逐项枚举 D1–D12 闸门快照。",
+        "descriptionEn": "AI pre-delivery automated self-check that must run before any result delivery.",
+        "icon": "",
+        "categories": [
+          "collaboration",
+          "productivity-tools"
+        ],
+        "source": "others",
+        "featured": 0,
+        "preinstalled": false,
+        "lifecycleStatus": "published",
+        "useCount": 318294,
+        "installCount": 34188,
+        "updatedAt": "2026-09-03T08:47:48Z"
+      },
+      {
+        "skillId": "skill_2",
+        "name": "neodata-financial-search",
+        "version": "1.1.0",
+        "displayNameZh": "NeoData金融搜索服务",
+        "displayNameEn": "Neodata Financial Search",
+        "descriptionZh": "自然语言查询股票、基金、指数、债券、期货、期权、宏观、外汇、大宗商品等全品类金融数据。",
+        "descriptionEn": "Natural language financial data search across stocks, funds, bonds, futures and more.",
+        "icon": "",
+        "categories": [
+          "data-analysis",
+          "investment-finance"
+        ],
+        "source": "others",
+        "featured": 0,
+        "preinstalled": false,
+        "lifecycleStatus": "published",
+        "useCount": 31172,
+        "installCount": 5200,
+        "updatedAt": "2026-09-20T00:00:00Z"
+      },
+      {
+        "skillId": "skill_3",
+        "name": "xlsx",
+        "version": "2.0.0",
+        "displayNameZh": "Excel 表格处理",
+        "displayNameEn": "Excel spreadsheet handling",
+        "descriptionZh": "创建、读取、编辑 Excel 文件，支持公式与格式。",
+        "descriptionEn": "Create, read and edit Excel files with formulas and formatting.",
+        "icon": "",
+        "categories": [
+          "productivity-tools"
+        ],
+        "source": "official",
+        "featured": 1,
+        "preinstalled": false,
+        "lifecycleStatus": "published",
+        "useCount": 18401,
+        "installCount": 9000,
+        "updatedAt": "2026-09-01T00:00:00Z"
+      }
+    ]
+  },
+  "/skills/installed": {
+    "ok": true,
+    "skillsDir": "C:\\\\Users\\\\demo\\\\.dsh\\\\skills",
+    "total": 1,
+    "skills": [
+      {
+        "dir": "xlsx",
+        "name": "xlsx",
+        "description": "Excel",
+        "displayName": "",
+        "version": "2.0.0"
+      }
+    ]
   }
 }

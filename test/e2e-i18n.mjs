@@ -17,79 +17,18 @@ const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
+// 用共享的 mock-data.json，避免和 screenshot.mjs 各写一份而漏接口
+// （之前就因为这个：e2e 里少了 /credit/summary，消耗面板渲染不出来）
+const MOCK = JSON.parse(fs.readFileSync(path.join(HERE, 'mock-data.json'), 'utf8'));
+
 // 起一个静态服务器；API 请求返回假数据，让页面能渲染出内容
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
 
   if (url.pathname.startsWith('/wb-console/api/')) {
-    const body = (() => {
-      if (url.pathname.endsWith('/mode')) {
-        return { ok: true, mode: 'plugin', plugin: { online: true, accountCount: 2, error: null } };
-      }
-      if (url.pathname.endsWith('/overview')) {
-        return {
-          ok: true,
-          mode: 'plugin',
-          plugin: {
-            accounts: [
-              {
-                id: 'a1', label: 'acct-one', nickname: 'Account One', domain: 'www.codebuddy.cn',
-                expiresAt: '2026-11-25T08:59:36.371Z', disabled: false, cooling: false,
-                credits: { total: 2371, packages: [{ packageName: 'Pkg', remain: 471, size: 500 }] },
-                checkin: { active: true, todayCheckedIn: true, streakDays: 1, dailyCredit: 100, todayCredit: 100 },
-              },
-              {
-                id: 'a2', label: 'acct-two', nickname: 'Account Two', domain: 'www.workbuddy.cn',
-                expiresAt: '2026-11-25T08:35:58.401Z', disabled: false, cooling: false,
-                credits: { total: 2872, packages: [] },
-                checkin: { active: true, todayCheckedIn: false, streakDays: 2, dailyCredit: 100, todayCredit: 100 },
-              },
-            ],
-            distribution: 'round-robin', cooling: 0, region: 'cn',
-            models: [{ id: 'deepseek-v4.1-flash', multiplier: 0.11 }, { id: 'glm-5.3-flash', multiplier: 0.06 }],
-            selection: { enabledModelIds: ['deepseek-v4.1-flash'] },
-            automation: {
-              enabled: false, running: true, checkinHours: [9], taskHours: [11], reportHours: [10], streakHours: [12], travelHours: [9, 21],
-              jobs: { checkin: { ok: 1, credit: 100 }, tasks: { credit: 600, energy: 20, claimed: 4 } },
-              earningsToday: { a1: { credit: 700 } }, runInProgress: false,
-            },
-          },
-        };
-      }
-      if (url.pathname.endsWith('/tasks')) {
-        return {
-          ok: true,
-          totals: { accounts: 2, pendingTasks: 2, claimableTasks: 1, pendingCredit: 200, claimableCredit: 100 },
-          accounts: [
-            {
-              uid: 'a1', nickname: 'Account One', ok: true,
-              summary: { total: 18, pendingCredit: 200, claimableCredit: 100 },
-              claimable: [{ taskCode: 't_claim', title: 'Ready to claim', state: 'claimable', current: 3, target: 3, percent: 100, credit: 100, energy: 5, _uid: 'a1' }],
-              pending: [{ taskCode: 't_pending', title: 'Almost there', state: 'pending', current: 1, target: 3, percent: 33, credit: 100, energy: 5, _uid: 'a1' }],
-            },
-          ],
-        };
-      }
-      if (url.pathname.endsWith('/history')) {
-        // 造 5 天数据，验证折线图与变化量渲染
-        return {
-          ok: true,
-          windowDays: 30,
-          totalRecords: 5,
-          series: [
-            { day: '2026-09-27', credit: 1000, accounts: 2, checkedIn: 2, delta: null },
-            { day: '2026-09-28', credit: 1200, accounts: 2, checkedIn: 2, delta: 200 },
-            { day: '2026-09-29', credit: 1200, accounts: 2, checkedIn: 1, delta: 0 },
-            { day: '2026-09-30', credit: 1500, accounts: 2, checkedIn: 2, delta: 300 },
-            { day: '2026-10-01', credit: 1450, accounts: 2, checkedIn: 2, delta: -50 },
-          ],
-          accounts: [{ uid: 'a1', nickname: 'Account One', firstDay: '2026-09-27', lastDay: '2026-10-01', observedDays: 5, checkedInDays: 5, lastCredit: 1450 }],
-        };
-      }
-      return { ok: true };
-    })();
+    const key = Object.keys(MOCK).find((k) => url.pathname.endsWith(k));
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify(body));
+    res.end(JSON.stringify(key ? MOCK[key] : { ok: true }));
     return;
   }
 
@@ -168,6 +107,14 @@ async function checkLang(lang, label) {
   await ev(`document.querySelector('#btn-history')?.click()`);
   await new Promise((r) => setTimeout(r, 1500));
 
+  // 点「刷新消耗」，验证消耗面板渲染
+  await ev(`document.querySelector('#btn-spend')?.click()`);
+  await new Promise((r) => setTimeout(r, 1800));
+
+  // 点「加载市场」，验证技能市场渲染
+  await ev(`document.querySelector('#btn-skills')?.click()`);
+  await new Promise((r) => setTimeout(r, 2500));
+
   const out = await ev(`JSON.stringify({
     htmlLang: document.documentElement.lang,
     title: document.querySelector('h1')?.textContent,
@@ -183,7 +130,14 @@ async function checkLang(lang, label) {
     histRows: document.querySelectorAll('.hist-row').length,
     chartPath: (document.querySelector('.chart-line')?.getAttribute('d') || '').slice(0, 30),
     deltaUp: document.querySelector('.delta.up')?.textContent,
-    deltaDown: document.querySelector('.delta.down')?.textContent
+    deltaDown: document.querySelector('.delta.down')?.textContent,
+    spendTitle: document.querySelector('#spend-panel h2')?.textContent,
+    spendSpent: document.querySelector('#spend-body .check-stat.bad b')?.textContent,
+    spendGained: document.querySelector('#spend-body .check-stat.ok b')?.textContent,
+    skillsTitle: document.querySelector('#skills-panel h2')?.textContent,
+    skillsRows: document.querySelectorAll('.skill-row').length,
+    skillsInstallBtn: document.querySelector('.act-skill-add')?.textContent,
+    skillsUninstallBtn: document.querySelector('.act-skill-del')?.textContent
   })`);
 
   console.log(`\n=== ${label} (${lang}) ===`);
@@ -225,15 +179,51 @@ if (!zhRes.o.chartPath.startsWith('M')) {
   bad++;
 } else console.log('  ✓ 折线图已渲染');
 
-if (!zhRes.o.deltaUp || !zhRes.o.deltaDown) {
-  console.log(`  ✗ 涨跌标注缺失：up=${JSON.stringify(zhRes.o.deltaUp)} down=${JSON.stringify(zhRes.o.deltaDown)}`);
+// 涨跌标注：按共享 mock 的数据判断该出现什么
+// （mock 的历史目前单调上升，所以只有 up；若 mock 加了下降日，down 也必须出现）
+const histSeries = (MOCK['/history'] && MOCK['/history'].series) || [];
+const mockHasDrop = histSeries.some((d) => typeof d.delta === 'number' && d.delta < 0);
+if (!zhRes.o.deltaUp) {
+  console.log('  ✗ 上涨标注缺失（up=' + JSON.stringify(zhRes.o.deltaUp) + '）');
   bad++;
-} else console.log('  ✓ 涨跌标注正常');
+} else if (mockHasDrop && !zhRes.o.deltaDown) {
+  console.log('  ✗ mock 含下降日，但下降标注缺失');
+  bad++;
+} else {
+  console.log('  ✓ 涨跌标注正常' + (mockHasDrop ? '' : '（mock 无下降日，符合预期）'));
+}
 
 if (zhRes.o.histTitle === enRes.o.histTitle) {
   console.log('  ✗ 历史面板标题未随语言变化');
   bad++;
 } else console.log('  ✓ 历史面板标题随语言变化');
+
+// 消耗面板：必须渲染出数字，且随语言切换
+if (!zhRes.o.spendSpent) {
+  console.log('  ✗ 消耗面板未渲染（spendSpent=' + JSON.stringify(zhRes.o.spendSpent) + '）');
+  bad++;
+} else console.log('  ✓ 消耗面板已渲染（消耗 ' + zhRes.o.spendSpent + ' / 入账 ' + zhRes.o.spendGained + '）');
+
+if (zhRes.o.spendTitle === enRes.o.spendTitle) {
+  console.log('  ✗ 消耗面板标题未随语言变化');
+  bad++;
+} else console.log('  ✓ 消耗面板标题随语言变化');
+
+// 技能市场：必须渲染出技能行与按钮
+if (!zhRes.o.skillsRows) {
+  console.log('  ✗ 技能市场未渲染任何技能行');
+  bad++;
+} else console.log(`  ✓ 技能市场已渲染（${zhRes.o.skillsRows} 个技能）`);
+
+if (!zhRes.o.skillsInstallBtn) {
+  console.log('  ✗ 技能市场缺少安装按钮');
+  bad++;
+} else console.log('  ✓ 技能市场有安装按钮：' + zhRes.o.skillsInstallBtn);
+
+if (zhRes.o.skillsTitle === enRes.o.skillsTitle) {
+  console.log('  ✗ 技能市场标题未随语言变化');
+  bad++;
+} else console.log('  ✓ 技能市场标题随语言变化');
 
 chrome.kill();
 server.close();

@@ -3,6 +3,32 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.5] - 2026-10-02
+
+### 修复
+
+- **选择器「加载失败：installedSkills is not defined」。**
+
+  v1.4.4 的一次死代码清理把 `installedSkills` 的定义连同相邻行一起删了，
+  但调用还在 —— 技能选择器一打开就崩。已恢复数据函数
+  （`installedSkills` / `listSkills` / `installSkillApi` / `uninstallSkillApi`），
+  并补了防回归断言。
+
+- **设置页按需求改为「只显示技能市场」。**
+
+  上一版用 iframe 嵌了整个 `/wb-console/` 控制台页（账号池、签到历史都在）。
+  现在换成**原生 React 市场组件**：搜索 / 分页 / 安装 / 重装 / 卸载，
+  自动加载首页，不再嵌套页面。完整控制台仍走 `/wb-console/`。
+
+### 测试
+
+- 新增 `mount-browser-test.mjs`（5 项）：在**真实 Chrome** 里加载
+  React UMD、执行 bundle、挂载三个组件、跑完 effects，
+  断言市场技能名、总数统计、⚡ WorkBuddy 按钮实际出现在 DOM 里。
+  这取代了只能看空壳的 renderToString 方案。
+- 测试 204 → **203 项**（SSR 测试被更强的挂载测试取代），
+  全绿；数据桩隔离，不碰真实凭证。
+
 ## [1.4.4] - 2026-10-02
 
 ### 修复（真正的根因）

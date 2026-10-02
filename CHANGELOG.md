@@ -3,6 +3,31 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.4] - 2026-10-02
+
+### 修复（真正的根因）
+
+- **设置页与输入框按钮空白：jsx() 的 children 被当成 key 丢掉了。**
+
+  前几版把 child 当作 `jsx(type, props, child)` 的第三个参数传。
+  但 jsx-runtime 的签名是 **`jsx(type, props, key)`** ——
+  第三个参数是 key，children 必须放在 `props.children` 里。
+  传错的 child 被静默丢弃，组件渲染成功但**输出为空**：
+  设置页只剩一个空 div，按钮只剩一个空 Fragment。
+  无报错、无边界触发、测试全绿 —— 因为没有一个测试真的渲染过组件。
+
+  用真实 React（`react-dom/server`）渲染后当场证实：
+  修复前 iframe/文本全部缺失，修复后完整输出。
+
+- **新增 `render-real-test.mjs`（6 项）：用真实 React 渲染每个组件，**
+  断言 iframe、按钮文本等实际出现在输出里。
+  这类"渲染成功但内容为空"的 bug，今后会被当场拦住。
+
+### 说明
+
+前两版的 iframe 方案本身没错，错的是元素创建方式 ——
+换成 iframe 只是掩盖了 jsx 契约问题。
+
 ## [1.4.3] - 2026-10-02
 
 ### 变更

@@ -1,6 +1,6 @@
 {
   "name": "dsh-workbuddy-console",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "WorkBuddy account console + skill market for DeepSeek Harness: batch check-in, pending tasks, session health, history and credit usage, the WorkBuddy skill market (with an in-composer skill picker), automation and the model pool. Bilingual.",
   "license": "MIT",
   "author": "dhdbvcg",

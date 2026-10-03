@@ -16,12 +16,20 @@ import path from 'node:path';
 import os from 'node:os';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const IP = '104.16.4.34';
 const HOST = 'registry.npmjs.org';
-const TARBALL = '/dsh-workbuddy-console/-/dsh-workbuddy-console-2.0.0.tgz';
+
+// 版本从 package.json 读 —— 写死会在每次发版后验错版本
+const pkgJson = JSON.parse(fs.readFileSync(path.resolve(HERE, '..', 'package.json'), 'utf8'));
+const VERSION = pkgJson.version;
+const TARBALL = `/${pkgJson.name}/-/${pkgJson.name}-${VERSION}.tgz`;
 const PROFILE = 'C:/Users/dell/.dsh/profiles/desktop';
+
+console.log('验证版本: ' + pkgJson.name + '@' + VERSION);
 
 let fail = 0;
 const ok = (m) => console.log('  ✓ ' + m);

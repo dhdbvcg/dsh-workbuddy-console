@@ -17,6 +17,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+// 本文件是 ESM，没有全局 require —— 必须显式取 createRequire。
+// （曾经在这里直接写 require(...)，它抛错又被 catch 吞掉，
+//   导致「能否自然解析」的判断恒为 false，新逻辑形同虚设。）
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VENDOR = path.resolve(HERE, '..', 'vendor', 'xdpool');
@@ -44,10 +48,37 @@ function alreadyOk() {
   return REQUIRED.every((d) => fs.existsSync(path.join(LINK, d)));
 }
 
+/**
+ * Node 能不能**不靠链接**解析到 peer 依赖？
+ *
+ * 从 vendor 的实现文件出发用真实解析规则试一遍：
+ *   - 以 link: 方式开发时，包在 profile 之外，向上找不到 node_modules → 需要链接
+ *   - 以 npm 安装时，包在 <profile>/node_modules/ 下，向上就能找到 DSH 的依赖
+ *     → 不需要链接（而且往 node_modules 里写东西会被重装清掉）
+ *
+ * 实测依据：scripts/verify-published.mjs 里把发布包放进模拟 profile 后，
+ * 不建链接也能 import 成功。
+ */
+function resolvesNaturally() {
+  try {
+    const req = createRequire(path.join(VENDOR, 'lib', 'index.js'));
+    // 只要有一个能解析到，就说明向上查找路径是通的
+    req.resolve(REQUIRED[0]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function linkVendorDeps(opts = {}) {
   const logger = opts.logger || console;
   if (!fs.existsSync(VENDOR)) return { ok: false, reason: 'vendor/xdpool 不存在' };
-  if (alreadyOk()) return { ok: true, skipped: true };
+
+  // 优先信任 Node 自己的解析（npm 安装的场景）
+  if (resolvesNaturally()) {
+    return { ok: true, skipped: true, via: 'natural' };
+  }
+  if (alreadyOk()) return { ok: true, skipped: true, via: 'link' };
 
   // 已有残留（可能断的）先清掉
   try {

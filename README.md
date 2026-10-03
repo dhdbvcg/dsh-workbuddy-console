@@ -14,6 +14,12 @@
 
 [English](README.en.md)
 
+[![npm](https://img.shields.io/npm/v/dsh-workbuddy-console.svg)](https://www.npmjs.com/package/dsh-workbuddy-console)
+
+```bash
+pnpm add dsh-workbuddy-console
+```
+
 ![界面](assets/console.png)
 
 ## 功能
@@ -40,11 +46,33 @@
 ### 前置条件
 
 1. **DSH 已安装并能正常运行**
-2. **[dsh-workbuddy-xdpool](https://github.com/XDTrees/dsh-workbuddy-xdpool) 插件已安装**
-   —— 账号发现、签到、积分、任务数据都由它提供
-3. **本机已登录过 WorkBuddy 桌面端**（或已有 auth 文件）
+2. **本机已登录过 WorkBuddy 桌面端**（或已有 auth 文件）
+
+> 不再需要单独安装 `dsh-workbuddy-xdpool` —— 账号池/模型池/签到
+> 已经并入本插件（见 [THIRD-PARTY.md](THIRD-PARTY.md)）。
 
 ### 安装
+
+**方式一：从 npm 安装（推荐）**
+
+```bash
+cd <你的 DSH profile 目录>        # 例如 ~/.dsh/profiles/desktop
+pnpm add dsh-workbuddy-console
+```
+
+然后在 profile 的 `cordis.patch.yml` 里注册：
+
+```yaml
+- id: llm-workbuddy-xdpool
+  name: dsh-workbuddy-console
+- id: workbuddy-console
+  name: dsh-workbuddy-console
+```
+
+> `llm-workbuddy-xdpool` 这个 id 要保留：账号池卡片靠它找到自己的
+> 设置作用域，改名会导致模型选择/自动化收益读写不到。
+
+**方式二：从源码安装（开发用）**
 
 ```bash
 git clone https://github.com/dhdbvcg/dsh-workbuddy-console.git
@@ -52,8 +80,8 @@ cd dsh-workbuddy-console
 node scripts/install.mjs
 ```
 
-安装脚本会自动定位 DSH profile、注册插件、并以正确的 `link:` 形式写入依赖。
-然后**重启 DSH**。
+安装脚本会自动定位 DSH profile、注册插件、以正确的 `link:` 形式写入依赖，
+并给合并进来的 vendor 代码建好依赖链接。然后**重启 DSH**。
 
 可选参数：
 

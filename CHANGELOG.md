@@ -3,7 +3,41 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.1] - 2026-10-04
+
+### 改进
+
+- README 补上 npm 安装方式与「条目 id 必须保留」的说明
+- `link-vendor` 先判断 Node 能否自然解析依赖：npm 安装（包已在 profile 内）时
+  不再往 `node_modules` 里建链接（会被重装清掉）；只有 `link:` 开发模式才需要
+- 修一个静默 bug：`link-vendor` 是 ESM 却写了全局 `require`，抛错被 `catch`
+  吞掉，导致「能否自然解析」恒为 false —— 上面的判断此前形同虚设
+- 新增发布相关脚本：
+  - `scripts/prepublish-check.mjs` —— 发布前自检（字段/文件/敏感信息/体积）
+  - `scripts/publish-via-proxy.mjs` —— DNS 被污染时的发布通道
+  - `scripts/verify-published.mjs` —— 下载已发布的包并验证真能用
+- 新增 `test/link-vendor-test.mjs`：实测「有链接 / 无链接」两个分支
+- 测试 204 → **210 项**
+
 ## [2.0.0] - 2026-10-04
+
+### 发布到 npm
+
+`dsh-workbuddy-console@2.0.0` 已发布：
+<https://www.npmjs.com/package/dsh-workbuddy-console>
+
+```bash
+pnpm add dsh-workbuddy-console
+```
+
+- 包内含 `vendor/xdpool/`，**装这一个就够**，不用再单独装 dsh-workbuddy-xdpool
+- `vendor/xdpool/LICENSE-ORIGINAL` 随包分发，保留 XDTrees 的 MIT 署名
+- 已实测：把发布出去的 tarball 解包放进模拟 profile 布局，
+  不依赖本机链接即可 import 成功（`scripts/verify-published.mjs`）
+
+> 本机 DNS 把 `registry.npmjs.org` 污染到了国内 IP（npm 报错里出现
+> m.baidu.com）。`scripts/publish-via-proxy.mjs` 用本地转发代理 +
+> 真实 Cloudflare IP 解决，发布用它即可。
 
 ### 变更：并入 dsh-workbuddy-xdpool
 

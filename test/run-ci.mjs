@@ -33,6 +33,7 @@ const TESTS = [
   ['manifest-test.mjs', 'package.json 与 DSH 加载协议一致性'],
   ['skill-market-test.mjs', '技能市场 / 路径安全 / frontmatter / 卸载'],
   ['client-bundle-test.mjs', '客户端 bundle / 插槽注册 / inject 覆盖'],
+  ['link-vendor-test.mjs', 'vendor 依赖链接 / 自然解析判断'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
   ['check-test.mjs', 'JWT / 凭证扫描 / 探活判定 / 体检 / 登录白名单'],
   ['tasks-test.mjs', '任务读取 / 状态归类 / 批量汇总'],

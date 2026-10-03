@@ -2,8 +2,9 @@
  * 测试入口：在 DSH profile 目录下运行全部测试。
  *
  * 为什么要换目录：
- *   tasks.mjs 需要 import dsh-workbuddy-xdpool，而那个包只装在
- *   profile 的 node_modules 里。同时各测试文件用的是相对 import（../lib/...），
+ *   tasks.mjs 会 import 模型池实现（现在来自本仓库的 vendor/xdpool），
+ *   而它依赖的 peer 包装在 profile 的 node_modules 里。
+ *   同时各测试文件用的是相对 import（../lib/...），
  *   所以必须「复制到 profile 下再跑」才能同时满足两边。
  *   这个脚本把这件事自动化，避免每次手工复制。
  *
@@ -19,8 +20,19 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = path.dirname(HERE);
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+const PKG_NAME = 'dsh-workbuddy-console';
 
-/** 找到一个装着 dsh-workbuddy-xdpool 的 profile 目录 */
+/**
+ * 找一个**装着本插件**的 profile 目录。
+ *
+ * 这里原先找的是 dsh-workbuddy-xdpool —— 那是合并之前的事。
+ * 合并后本插件自带 vendor/xdpool，旧包已卸载，于是 desktop 不再匹配、
+ * 直接退到了 web profile（那里还残留着旧包）。
+ * 后果：测试跑在 web profile 下，Node 从那儿解析得到旧的 xdpool，
+ * 让「引用不存在的包名」这条断言在特定环境下失效 —— 排查了很久。
+ *
+ * 现在改为匹配本插件自身，并优先信任 DSH_PROFILE_DIR。
+ */
 function findProfile() {
   const candidates = [
     process.env.DSH_PROFILE_DIR,
@@ -29,7 +41,12 @@ function findProfile() {
   ].filter(Boolean);
 
   for (const p of candidates) {
-    if (fs.existsSync(path.join(p, 'node_modules', 'dsh-workbuddy-xdpool'))) return p;
+    if (fs.existsSync(path.join(p, 'node_modules', PKG_NAME))) return p;
+  }
+
+  // 兜底：本插件还没装进任何 profile 时，用第一个存在的（保证测试能跑）
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
   }
   return null;
 }
@@ -50,6 +67,7 @@ const TESTS = [
   ['skill-market-test.mjs', '技能市场 / 路径安全 / frontmatter / 卸载'],
   ['client-bundle-test.mjs', '客户端 bundle / 插槽注册 / inject 覆盖'],
   ['link-vendor-test.mjs', 'vendor 依赖链接 / 自然解析判断'],
+  ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
 ];
 
@@ -65,13 +83,13 @@ try {
 
 const profile = findProfile();
 if (!profile) {
-  console.error('找不到装有 dsh-workbuddy-xdpool 的 DSH profile。');
-  console.error('请确认 dsh-workbuddy-xdpool 已安装，或设置 DSH_PROFILE_DIR。');
+  console.error('找不到 DSH profile。');
+  console.error('请先安装本插件，或设置 DSH_PROFILE_DIR。');
   process.exit(2);
 }
 
 console.log(`插件目录: ${PLUGIN_DIR}`);
-console.log(`运行目录: ${profile}（为了解析 dsh-workbuddy-xdpool）\n`);
+console.log(`运行目录: ${profile}（为了解析 vendor 的 peer 依赖）\n`);
 
 // 把 lib/ 和 web/ 复制到 profile 下，让相对 import（../lib/...）可用。
 // 注意：测试文件在 <profile>/.wb-console-test/test/ 下，
@@ -147,10 +165,12 @@ for (const [file, desc] of TESTS) {
     total += p;
     failed += f;
     rows.push([file, `${p} 通过${f ? `, ${f} 失败` : ''}`, desc]);
+    // 有失败时也把输出打出来 —— 否则只看到 "N 失败"，还得手工复现
+    if (f > 0) console.log(`\n--- ${file} 输出 ---\n${out.slice(-2500)}`);
   } else {
     failed += 1;
     rows.push([file, '崩溃', desc]);
-    console.log(`\n--- ${file} 输出 ---\n${out.slice(-1500)}`);
+    console.log(`\n--- ${file} 输出 ---\n${out.slice(-2500)}`);
   }
 }
 

@@ -3,6 +3,51 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.3] - 2026-10-04
+
+### 修复（严重）
+
+- **插件在 DSH 里显示「异常 / 无法使用插件」。**
+
+  `cordis.patch.yml` 里用了 JavaScript 的块注释 `/** ... */` 当说明。
+  YAML 的注释**只有 `#`**，`/**` 会被当成内容，于是解析直接失败：
+
+  ```
+  failed to parse overlay .../cordis.patch.yml:
+  YAMLException: end of the stream or a document separator is expected (2:73)
+  ```
+
+  这是合并时引入的，**2.0.0 / 2.0.1 / 2.0.2 三个版本都是坏的**，本版修好。
+
+- 同时修正该文件里另一处错误：`llm-workbuddy-xdpool` 条目原先写的
+  `name: dsh-workbuddy-xdpool` —— 那个包在合并后已被卸载，即使 YAML 能解析
+  也会加载失败。现在两条都指向 `dsh-workbuddy-console`。
+
+### 为什么 218 项测试没拦住
+
+当时没有任何测试**解析过**那个文件。现在补上两道：
+
+- `scripts/check-manifest.mjs`：真的用 YAML 解析器读 `cordis.patch.yml`，
+  并校验顶层是数组、无重复 id、每个 `name` 都能解析；
+  另外单独拦 `/* */`、Tab 缩进这些写法
+- `test/manifest-guard-test.mjs`（8 项）：故意写坏配置，验证上面这些检查
+  真的会失败 —— 抓不到的守卫等于没有
+- `scripts/verify-published.mjs`：连**已发布的包**也解析一遍它的
+  `cordis.patch.yml`，防止坏文件发出去
+
+### 测试运行器
+
+- 修 `findProfile()`：它还在用**已被卸载的** `dsh-workbuddy-xdpool` 当
+  「这个 profile 可用」的标记，于是 desktop 不匹配、悄悄退到 web profile
+  （那里残留着旧包）。副作用是测试从 web 的 node_modules 解析到了旧包，
+  让「引用不存在的包名」这条断言在特定环境下失效。
+  现在改为匹配本插件自身
+- 运行器在有失败时也打印该测试的输出（原先只在崩溃时打印，有失败得手工复现）
+
+### 测试
+
+- 210 → **218 项**，全绿
+
 ## [2.0.2] - 2026-10-04
 
 ### 文档

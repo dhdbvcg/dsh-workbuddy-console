@@ -93,6 +93,43 @@ const lic = fs.readFileSync(path.join(pkgDir, 'vendor/xdpool/LICENSE-ORIGINAL'),
 if (/XDTrees/.test(lic) && /MIT License/.test(lic)) ok('LICENSE-ORIGINAL 保留了 XDTrees 署名');
 else bad('LICENSE-ORIGINAL 内容不对');
 
+// cordis.patch.yml 必须能被 YAML 解析 —— 它是插件的注册入口，
+// 一旦写坏，插件在 DSH 里直接「异常 / 无法使用」。
+// 2.0.0~2.0.2 三个版本都带着坏掉的 YAML 发出去了，加这条就是为了拦住它。
+console.log('\n=== cordis.patch.yml 可解析性 ===');
+const patchText = fs.readFileSync(path.join(pkgDir, 'cordis.patch.yml'), 'utf8');
+const codeOnly = patchText.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+if (/\/\*|\*\//.test(codeOnly)) bad('发布的 cordis.patch.yml 含 JS 注释语法（/* 或 */）');
+else ok('未出现 JS 注释语法');
+
+let yamlOk = false;
+for (const cand of ['yaml', 'C:/Users/dell/.dsh/profiles/desktop']) {
+  try {
+    let yamlMod;
+    if (cand === 'yaml') yamlMod = await import('yaml');
+    else {
+      const { createRequire } = await import('node:module');
+      const req = createRequire(cand + '/noop.js');
+      yamlMod = await import(pathToFileURL(req.resolve('yaml')).href);
+    }
+    const doc = yamlMod.parse(patchText);
+    if (Array.isArray(doc)) {
+      const ids = doc.flatMap((e) => (Array.isArray(e.insert) ? e.insert.map((x) => x.id) : [e.id])).filter(Boolean);
+      ok(`YAML 解析成功，顶层数组，条目 id: ${ids.join(', ')}`);
+      yamlOk = true;
+    } else {
+      bad('YAML 顶层不是数组');
+    }
+    break;
+  } catch (e) {
+    if (cand === 'yaml') continue; // 试下一个来源
+    bad('YAML 解析失败: ' + String(e.message).split('\n')[0]);
+  }
+}
+if (!yamlOk && !/解析失败/.test('')) {
+  // 已在上面的分支里报过，这里不重复
+}
+
 // ---- 3. 模拟 profile 布局，验证裸依赖能解析 ----
 console.log('\n=== 3. 模拟 profile 安装并 import ===');
 const sim = path.join(PROFILE, '.wb-pkgtest');

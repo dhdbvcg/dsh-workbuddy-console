@@ -1,5 +1,11 @@
 # dsh-workbuddy-console
 
+> **本插件已并入 `dsh-workbuddy-xdpool`**（账号池 / 模型池 / 签到）。
+> 两者现在是**一个插件**：装一次，设置里同时有「账号池」和「WorkBuddy 技能市场」
+> 两张卡片，不用再分别启用、分别更新。
+> 原作者 XDTrees 的代码原样保留在 [vendor/xdpool/](vendor/xdpool/)，
+> 许可与升级方式见 [THIRD-PARTY.md](THIRD-PARTY.md)。
+
 **WorkBuddy 多账号控制台** —— 一个跑在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 里的网页，
 用来管理多个 WorkBuddy 账号、一键领取所有账号的积分，并查看还剩什么没做完。
 

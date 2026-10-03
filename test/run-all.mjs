@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +52,16 @@ const TESTS = [
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
 ];
 
+// 先重新生成内联块：vendor 里的账号池客户端源码要同步进 lib/client.js。
+// 生成器幂等 —— 源码没变时是空操作，所以每次跑测试都顺手做一次，
+// 避免 vendor 更新后忘了重新生成。
+try {
+  execFileSync(process.execPath, [path.join('scripts', 'gen-xdpool-client.mjs')], { stdio: 'pipe' });
+} catch (e) {
+  console.error('生成 xdpool 内联块失败：' + (e && (e.stderr || e.message)));
+  process.exit(2);
+}
+
 const profile = findProfile();
 if (!profile) {
   console.error('找不到装有 dsh-workbuddy-xdpool 的 DSH profile。');
@@ -87,9 +97,19 @@ for (const f of fs.readdirSync(path.join(PLUGIN_DIR, 'scripts'))) {
 
 // cordis.patch.yml 与 README 等根文件：manifest-test 会检查它们是否存在
 // （漏拷会让测试报出「文件不存在」，那是测试环境的假阳性）
-for (const f of ['cordis.patch.yml', 'README.md', 'README.en.md', 'LICENSE', 'CHANGELOG.md']) {
+for (const f of ['cordis.patch.yml', 'README.md', 'README.en.md', 'LICENSE', 'CHANGELOG.md', 'THIRD-PARTY.md']) {
   const src = path.join(PLUGIN_DIR, f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(linkDir, f));
+}
+
+// vendor/ 也要复制 —— 合并进来的 xdpool 实现由 lib/index.js 直接 import。
+// 少了它，插件入口会因为找不到 ../vendor/xdpool/lib/index.js 而加载失败。
+// node_modules 链接不复制（那是本机路径，测试环境用不到）。
+if (fs.existsSync(path.join(PLUGIN_DIR, 'vendor'))) {
+  fs.cpSync(path.join(PLUGIN_DIR, 'vendor'), path.join(linkDir, 'vendor'), {
+    recursive: true,
+    filter: (src) => !src.includes(`${path.sep}node_modules`),
+  });
 }
 
 let total = 0;

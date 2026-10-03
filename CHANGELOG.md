@@ -3,6 +3,47 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.0] - 2026-10-04
+
+### 变更：并入 dsh-workbuddy-xdpool
+
+现在**一个插件**同时提供：
+
+- 账号池 / 模型池 / 签到 / 自动化（原 `dsh-workbuddy-xdpool`）
+- 控制台 / 技能市场 / 积分统计 / 输入框技能选择器（本插件原有）
+
+设置里是两张卡片（账号池 + 技能市场），但只装一次、只启用一次、只更新一次。
+原先它们共用同一套账号发现、同一个账号池、同一个 web server，
+分成两个插件只会带来两个开关和两份要同步的配置。
+
+### 第三方代码
+
+`dsh-workbuddy-xdpool` 的运行时代码原样并入 `vendor/xdpool/`
+（MIT，Copyright (c) 2026 XDTrees，上游 <https://github.com/XDTrees/dsh-workbuddy-xdpool>）：
+
+- **未修改一行代码**，便于日后与上游对照升级
+- `vendor/xdpool/LICENSE-ORIGINAL` 保留原作者声明
+- 许可、归属与升级方法见 `THIRD-PARTY.md`
+
+### 实现要点
+
+- 宿主侧：`lib/index.js` 的 `apply` 先转发给 vendored 实现
+  （负责 provider 与账号池），再挂自己的路由；卸载时两半都会释放
+- 浏览器侧：vendored 的 `client.js` 以字符串常量内联进本插件的 bundle
+  （`scripts/gen-xdpool-client.mjs` 生成），执行一次并转发它的 `apply`，
+  于是账号池那张卡片也归本插件注册
+- `vendor/xdpool` 需要 peer 依赖（`@deepseek-ai/schemastery` 等），
+  而它位于源码目录、向上找不到 `node_modules` ——
+  `scripts/link-vendor.mjs` 建 junction 解决，安装器会自动调用
+- `lib/tasks.mjs` 改为优先用仓库自带的 vendor 副本
+
+### 测试
+
+- `run-all.mjs` 跑测试前会自动重新生成内联块，避免 vendor 更新后忘了生成
+- `run-all.mjs` 复制 `vendor/` 到测试目录（原先漏拷导致 3 个测试崩溃）
+- 新增 `merge-pool-test.mjs`：在真实 Chrome 里确认**两个设置卡片都注册成功**
+- 204 项全绿
+
 ## [1.4.6] - 2026-10-02
 
 ### 修复

@@ -1,9 +1,12 @@
 {
   "name": "dsh-workbuddy-console",
-  "version": "1.4.6",
-  "description": "WorkBuddy account console + skill market for DeepSeek Harness: batch check-in, pending tasks, session health, history and credit usage, the WorkBuddy skill market (with an in-composer skill picker), automation and the model pool. Bilingual.",
+  "version": "2.0.0",
+  "description": "WorkBuddy console for DeepSeek Harness, in one plugin: the account/model pool (merged from dsh-workbuddy-xdpool), the skill market with an in-composer skill picker, batch check-in, pending tasks, session health, history and credit usage. Bilingual.",
   "license": "MIT",
   "author": "dhdbvcg",
+  "contributors": [
+    "XDTrees (dsh-workbuddy-xdpool, vendored under vendor/xdpool — MIT)"
+  ],
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -14,11 +17,13 @@
   "files": [
     "lib",
     "web",
+    "vendor",
     "scripts",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
     "LICENSE",
+    "THIRD-PARTY.md",
     "CHANGELOG.md"
   ],
   "keywords": [

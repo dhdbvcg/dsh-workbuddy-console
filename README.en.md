@@ -1,5 +1,13 @@
 # dsh-workbuddy-console
 
+> **This plugin has absorbed `dsh-workbuddy-xdpool`** (account pool, model pool,
+> check-in). They are now **one plugin**: install once and the Settings dialog
+> shows both the pool card and the skill market — no separate enable, no
+> separate update.
+> XDTrees' original code is kept verbatim under
+> [vendor/xdpool/](vendor/xdpool/); see [THIRD-PARTY.md](THIRD-PARTY.md)
+> for licensing and how to upgrade it.
+
 **WorkBuddy multi-account console for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)** —
 a web page inside DSH that manages multiple WorkBuddy accounts, checks in every account with one click,
 and shows what is still left to do.

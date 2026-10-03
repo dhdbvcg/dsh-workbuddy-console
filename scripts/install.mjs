@@ -21,6 +21,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { linkVendorDeps } from './link-vendor.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = path.resolve(HERE, '..');
@@ -321,7 +322,12 @@ if (DRY) warn('dry-run 模式：不会写入任何文件');
 step('1. 定位 DSH profile');
 const profile = resolveProfile();
 ok(`profile: ${profile.dir}`);
-info(`xdpool: ${profile.hasXdpool ? '已安装 ✓' : '未安装（任务与模型池功能将不可用）'}`);
+// xdpool 已并入本仓库（vendor/xdpool），不再需要单独安装。
+// 若 profile 里还留着旧的独立副本，提示一下但不必阻止安装。
+if (profile.hasXdpool) {
+  info('检测到独立的 dsh-workbuddy-xdpool —— 现在已并入本插件，可选卸载它：');
+  info('  pnpm remove dsh-workbuddy-xdpool');
+}
 
 if (UNINSTALL) {
   step('2. 卸载');
@@ -369,9 +375,13 @@ if (DRY) {
     info('检查 pnpm 版本是否支持 file:/link: 语义，或手动建 junction');
   }
 
-  if (!profile.hasXdpool) {
-    warn('未检测到 dsh-workbuddy-xdpool —— 账号发现、签到、任务都依赖它');
-    info('先安装它：https://github.com/XDTrees/dsh-workbuddy-xdpool');
+  // 合并进来的 xdpool 需要能解析它的 peer 依赖（源码目录本身没有 node_modules）
+  const link = linkVendorDeps({ logger: { warn: (m) => warn(m) } });
+  if (link.ok) {
+    ok(link.skipped ? 'vendor 依赖链接已就绪' : `vendor 依赖已链接到 ${link.target}`);
+  } else {
+    warn('vendor 依赖链接失败 —— 模型池（provider）功能可能不可用');
+    info('手动执行：node scripts/link-vendor.mjs');
   }
 }
 

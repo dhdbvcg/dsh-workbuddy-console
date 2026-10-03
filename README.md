@@ -1,11 +1,5 @@
 # dsh-workbuddy-console
 
-> **本插件已并入 `dsh-workbuddy-xdpool`**（账号池 / 模型池 / 签到）。
-> 两者现在是**一个插件**：装一次，设置里同时有「账号池」和「WorkBuddy 技能市场」
-> 两张卡片，不用再分别启用、分别更新。
-> 原作者 XDTrees 的代码原样保留在 [vendor/xdpool/](vendor/xdpool/)，
-> 许可与升级方式见 [THIRD-PARTY.md](THIRD-PARTY.md)。
-
 **WorkBuddy 多账号控制台** —— 一个跑在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 里的网页，
 用来管理多个 WorkBuddy 账号、一键领取所有账号的积分，并查看还剩什么没做完。
 
@@ -19,6 +13,33 @@
 ```bash
 pnpm add dsh-workbuddy-console
 ```
+
+---
+
+## 🙏 致谢与代码来源（请先读这一段）
+
+本插件**包含了 [XDTrees](https://github.com/XDTrees) 的作品**，
+不是从零写的。原作者与其仓库：
+
+> ### [dsh-workbuddy-xdpool](https://github.com/XDTrees/dsh-workbuddy-xdpool) —— 作者 **XDTrees**
+>
+> 账号池、模型池（多账号自动轮换 / 容错）、签到、积分自动化 —— 这些能力的
+> 运行时代码由 **XDTrees** 编写，MIT 许可，**原样保留**在
+> [`vendor/xdpool/`](vendor/xdpool/)。
+>
+> 本插件只是把它们与控制台/技能市场合并成一个插件。
+> **模型池那部分的功能与设计功劳属于 XDTrees。**
+
+- 许可与归属：[THIRD-PARTY.md](THIRD-PARTY.md)
+- 原始许可全文：[vendor/xdpool/LICENSE-ORIGINAL](vendor/xdpool/LICENSE-ORIGINAL)
+  （`Copyright (c) 2026 XDTrees`，**请勿删除**）
+- 想要单独的账号池插件、或想给原作者反馈：
+  <https://github.com/XDTrees/dsh-workbuddy-xdpool>
+
+如果你只想要原汁原味的账号池插件，请直接安装原作者那一份；
+本仓库的价值在于**把两者合成一个**。
+
+---
 
 ![界面](assets/console.png)
 

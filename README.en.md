@@ -1,19 +1,40 @@
 # dsh-workbuddy-console
 
-> **This plugin has absorbed `dsh-workbuddy-xdpool`** (account pool, model pool,
-> check-in). They are now **one plugin**: install once and the Settings dialog
-> shows both the pool card and the skill market — no separate enable, no
-> separate update.
-> XDTrees' original code is kept verbatim under
-> [vendor/xdpool/](vendor/xdpool/); see [THIRD-PARTY.md](THIRD-PARTY.md)
-> for licensing and how to upgrade it.
-
 **WorkBuddy multi-account console for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)** —
 a web page inside DSH that manages multiple WorkBuddy accounts, checks in every account with one click,
 and shows what is still left to do.
 
 The page is served by **DSH's own webserver**, so it is available whenever DSH runs —
 no separate process, and no "connection refused".
+
+[中文](README.md)
+
+---
+
+## 🙏 Credits — please read this first
+
+This plugin **contains work by [XDTrees](https://github.com/XDTrees)**; it was not
+written from scratch. The original author and repository:
+
+> ### [dsh-workbuddy-xdpool](https://github.com/XDTrees/dsh-workbuddy-xdpool) — by **XDTrees**
+>
+> The account pool, the model pool (multi-account rotation and failover),
+> check-in and credit automation are **XDTrees'** runtime code, MIT licensed,
+> kept **verbatim** under [`vendor/xdpool/`](vendor/xdpool/).
+>
+> This plugin merely merges that with the console and the skill market.
+> **Credit for the model-pool functionality and its design belongs to XDTrees.**
+
+- Licensing and attribution: [THIRD-PARTY.md](THIRD-PARTY.md)
+- Original license text: [vendor/xdpool/LICENSE-ORIGINAL](vendor/xdpool/LICENSE-ORIGINAL)
+  (`Copyright (c) 2026 XDTrees` — **do not remove**)
+- Want the standalone pool plugin, or want to thank the original author:
+  <https://github.com/XDTrees/dsh-workbuddy-xdpool>
+
+If you only want the original account pool plugin, install theirs directly.
+What this repository adds is **having both in one plugin**.
+
+---
 
 ![UI](assets/console.en.png)
 

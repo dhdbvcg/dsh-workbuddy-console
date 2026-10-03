@@ -3,6 +3,31 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.2] - 2026-10-04
+
+### 文档
+
+- **两份 README 顶部加独立章节致谢 XDTrees**：明确账号池/模型池/签到/积分
+  自动化的运行时代码由 XDTrees 编写，本仓库只是把它们与控制台合并；
+  并指向 [THIRD-PARTY.md](THIRD-PARTY.md)、`LICENSE-ORIGINAL` 与原作者仓库。
+  想只用账号池的人可以直接装原作者那一份。
+- 本版同步到 npm，让 npm 页面也显示这段致谢。
+
+### 仓库
+
+- 首次把完整历史推送到 GitHub（此前远端只有 1.1.0 一个快照）。
+  远端与本地历史原本不相关（当初用 Git Data API 建的），
+  已核对「远端内容全部被本地包含」后以 `--force-with-lease` 覆盖，
+  并获得线性历史。详见下方「推送」一节。
+
+### 工具
+
+- 新增 `scripts/git-tunnel.mjs`：hosts 屏蔽 github.com 时，
+  用本地 CONNECT 隧道 + 真实 IP 执行任意 git 命令（fetch/push/ls-remote）
+- 新增 `scripts/check-github.mjs`、`scripts/check-remote-safety.mjs`：
+  推送前核对 token 身份/权限，以及 tag、release、分支、协作者、PR
+- 两个脚本都不含密钥：token 经环境变量交给临时 askpass，用完即删
+
 ## [2.0.1] - 2026-10-04
 
 ### 改进

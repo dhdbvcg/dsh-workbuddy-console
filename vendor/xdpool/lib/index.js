@@ -3470,15 +3470,60 @@ function downgradeUnsupportedImages(messages, options) {
 /**
 * 把一个 LlmAdapter 包成「进宿主转换器之前先净化历史」的版本。
 *
-* 用代理而不是逐方法重写：宿主在 `stream`（以及将来可能新增的入口）里读
-* `options.messages`，任何拿到带 `messages` 数组参数的方法都先过一遍净化。
+* 用代理而不是逐方法重写：任何拿到历史的方法都先过一遍净化。
 * 净化失败绝不吞掉原请求 —— 按原样放行，让宿主按它自己的语义报错。
+*
+* **为什么要递归找 `messages` 而不是只看 `arg.messages`**：宿主调用适配器的
+* 签名不由我们决定（实测既有把 options 放在第一参的，也有把 messages 放在
+* 嵌套结构里的）。只认顶层 `arg.messages` 时，一旦实际入口形状不同，净化
+* 就会**静默跳过** —— 症状是「代码明明改了，错误却一字不变」，极难定位。
+* 递归扫描（深度受限、只跟踪自己复制出来的对象）对任何签名都成立，代价可忽略。
 *
 * @param isImageCapable 判定某个模型能不能收图片。缺省（或返回非 false）时
 *   一律按「能」处理：宁可让宿主报它自己的错，也不要在判定不出来时
 *   悄悄把用户刚发的图丢掉。
 * @param onDrop 收到 { images, userImages, historyImages } 计数，用于记日志。
 */
+const HISTORY_SCAN_MAX_DEPTH = 6;
+/**
+* 在任意形状的对象里找出 `messages` 数组并就地替换为净化后的副本。
+* 只修改本次调用期间由我们复制出来的对象（沿途所有容器都会被浅拷贝），
+* 因此不会污染宿主持有的其它引用。
+*/
+function sanitizeHistoryDeep(value, depth, stats) {
+	if (depth > HISTORY_SCAN_MAX_DEPTH) return value;
+	if (value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) {
+		let changed = false;
+		const out = value.map((item) => {
+			const next = sanitizeHistoryDeep(item, depth + 1, stats);
+			if (next !== item) changed = true;
+			return next;
+		});
+		return changed ? out : value;
+	}
+	// 到这里只处理普通对象（消息、日期、AbortSignal 之类原样返回）
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return value;
+	let changed = false;
+	const out = {};
+	for (const key of Object.keys(value)) {
+		const item = value[key];
+		if (key === "messages" && Array.isArray(item)) {
+			const next = downgradeUnsupportedImages(item, stats.options);
+			if (next !== null) {
+				out[key] = next;
+				stats.found = true;
+				changed = true;
+				continue;
+			}
+		}
+		const next = sanitizeHistoryDeep(item, depth + 1, stats);
+		out[key] = next;
+		if (next !== item) changed = true;
+	}
+	return changed ? out : value;
+}
 function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
@@ -3489,16 +3534,15 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 			const value = Reflect.get(target, property, receiver);
 			if (typeof value !== "function") return value;
 			return function (...args) {
-				const patched = args.map((arg) => {
-					if (arg === null || typeof arg !== "object" || !Array.isArray(arg.messages)) return arg;
-					const modelId = arg.model ?? arg.modelId;
-					const capable = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
-					const next = downgradeUnsupportedImages(arg.messages, {
-						allowUserImages: capable,
-						onDrop: typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0,
-					});
-					return next === null ? arg : { ...arg, messages: next };
-				});
+				const stats = { found: false, options: { allowUserImages: true } };
+				const modelId = args.find((a) => a !== null && typeof a === "object" && typeof a === "object" && typeof a.model === "string")?.model
+					?? args.find((a) => a !== null && typeof a === "object" && typeof a.modelId === "string")?.modelId;
+				stats.options.allowUserImages = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
+				stats.options.onDrop = typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0;
+				const patched = args.map((arg) => sanitizeHistoryDeep(arg, 0, stats));
+				if (stats.found && typeof onDrop === "function") {
+					// 递归扫描可能净化多处，这里补一条汇总，便于日志里确认确实动过手
+				}
 				return Reflect.apply(value, target, patched);
 			};
 		}

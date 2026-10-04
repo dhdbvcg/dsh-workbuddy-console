@@ -323,5 +323,34 @@ await t('端到端：不支持图片的模型 + user 发了图 → 也能发出�
   }
 });
 
+await t('代理：嵌套形状里的 messages 也能拦到（签名无关）', () => {
+  // 回归：早先只认顶层 `arg.messages`。宿主实际调用签名不由我们决定，
+  // 一旦形状不同（options 在别的参数里、或 messages 嵌套一层），
+  // 净化会**静默跳过** —— 症状是「代码改了，错误一字不变」，极难定位。
+  const seen = [];
+  const fakeHost = { stream(...args) { seen.push(args); return 'ok'; } };
+  const wrapped = withToolImageDowngrade(fakeHost, () => true);
+
+  wrapped.stream({ model: 'hy4', input: { messages: [{ role: 'tool', content: [img()] }] } });
+  wrapped.stream('hy4', { model: 'hy4', messages: [{ role: 'tool', content: [img()] }] });
+  wrapped.stream({ model: 'hy4', messages: [{ role: 'tool', content: [img()] }] });
+
+  assert.strictEqual(seen.length, 3);
+  // 三种形状里的 messages 都应已被降级（位置分别在 args[0].input / args[1] / args[0]）
+  const pick = (args) => args.find((a) => a !== null && typeof a === 'object')?.input?.messages
+    ?? args.find((a) => a !== null && typeof a === 'object')?.messages;
+  for (const [i, args] of seen.entries()) {
+    const msgs = pick(args);
+    assert.ok(Array.isArray(msgs), `形状 ${i} 里没找到 messages`);
+    assert.ok(!msgs[0].content.some((b) => b.type === 'image'), `形状 ${i} 的图片未被降级`);
+  }
+
+  // 原始入参不能被就地改写（宿主可能复用同一个 options 对象）
+  const original = { model: 'hy4', messages: [{ role: 'tool', content: [img()] }] };
+  const before = JSON.stringify(original);
+  withToolImageDowngrade(fakeHost, () => true).stream(original);
+  assert.strictEqual(JSON.stringify(original), before, '不应就地修改调用方的对象');
+});
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

@@ -3,6 +3,42 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.25] - 2026-10-04
+
+### 修复：图片降级对「非标准调用形状」静默失效（用户实测报障）
+
+v2.0.23/24 上线后，用户重启 DSH 复测**错误一字未变**：
+`UNSUPPORTED_CONTENT: pi.ai cannot represent an image in an in-history … message`。
+
+逐条排除的假设：
+
+| 假设 | 结论 |
+|---|---|
+| profile 里是陈旧拷贝 | **否** —— inode 与开发目录相同，是链接，version 2.0.24 |
+| 插件入口没加载新代码 | **否** —— `lib/index.js` 静态 `import '../vendor/xdpool/lib/index.js'`，vendor 即开发目录 |
+| 有第二份插件副本在生效 | **否** —— 全盘只有一份 2.0.24 |
+| app.asar 版本变了导致断言不同 | **否** —— mtime 仍是 9/29，断言与之前读的一致 |
+| 净化逻辑判断错了 | **否** —— 宿主 `contentHasImage` 就是 `content.some(b => b.type === "image")`，与净化器一致 |
+| `new PiAiAdapter` 有多处构造、绕过包装 | **否** —— 全文件仅一处，且已包装 |
+
+剩下的唯一解释：**净化器根本没被调用** —— 它只认「顶层参数上的 `messages`」，
+而宿主实际调用适配器的签名不由我们决定。
+
+改成 `sanitizeHistoryDeep()`：递归（深度 ≤6）扫描参数里的 `messages` 数组，
+对任何签名 / 嵌套形状都成立。只修改本次调用中由我们复制出来的对象
+（沿途容器浅拷贝），**不就地改写调用方的对象** —— 宿主可能复用同一个
+options 对象。
+
+教训：**当症状是「代码改了但行为一字未变」时，优先怀疑「那段代码根本没
+被执行」，而不是「它执行了但算错了」。** 本次正是被「只认顶层 `arg.messages`」
+这个隐含假设拖了很久。
+
+### 测试
+
+- `test/tool-image-downgrade-test.mjs` 19 项：新增 1 项锁住**三种调用形状**
+  （`input.messages` 嵌套 / options 在第二参 / 顶层）都能拦到，
+  且验证不就地修改调用方对象
+
 ## [2.0.24] - 2026-10-04
 
 ### 修复：不支持图片的模型上，用户自己发的图也会让整段会话报废

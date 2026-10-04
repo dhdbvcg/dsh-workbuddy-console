@@ -58,6 +58,31 @@ v2.0.23 处理了「历史工具结果带图」，但宿主还有**第二道**�
 我的图」只能靠猜。现在每次降级会经 `ctx.logger.info` 记一行：丢弃总数、其中
 来自 user 消息 / 来自工具历史各多少、以及当时的模型 id。无降级时不记日志。
 
+### 修：降级代理破坏了 adapter 的 class 身份
+
+图片降级代理会包裹 `PiAiAdapter` 的**每一个**方法，而它在真实宿主里作用于
+**所有**请求 —— 不只是带图的。所以代理一旦在其它路径上出偏差，用户会看到
+「模型选择器坏了 / 正常聊天也坏了」，而且只会在重启后才发现。
+
+实测抓到一处：get 陷阱把 `constructor` 也当成方法包了一层，导致
+- `wrapped.constructor === PiAiAdapter` 变成 **false**
+- `wrapped.constructor.name` 变成**空串**（宿主里任何 class 身份判断、
+  或拼错误信息用到它都会拿到错的东西）
+
+已排除 `constructor` 不包。`instanceof` 与 `prototype` 本来就没被破坏
+（Proxy 默认转发 `getPrototypeOf`）。
+
+### 配套测试：A/B 对比代理前后的 adapter 行为
+
+`test/adapter-proxy-safety-test.mjs`（新增 6 项）拿**真实的** PiAiAdapter
+（不是假对象）做包装前后 A/B，方法面逐个跑、结果必须逐字相同：
+class 身份、同步方法、模型方法（`listModels` / `resolveModel`，
+含 UI 依赖的 `inputModalities`）、未知 provider/模型的失败路径、`prepareCall`，
+以及插件真实 adapter 的 `providerInfo` / `listModels`。
+
+（写测试时踩到：`modelInfo(snapshot, provider, model)` 是**内部**方法，
+第一参是 snapshot，拿它做 A/B 会因签名不同而误报 —— A/B 要用公开入口。）
+
 ### 测试
 
 - `test/tool-image-downgrade-test.mjs` 18 项：新增 1 项锁住日志计数

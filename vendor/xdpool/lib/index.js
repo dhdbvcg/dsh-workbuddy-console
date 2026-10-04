@@ -3482,6 +3482,10 @@ function downgradeUnsupportedImages(messages, options) {
 function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
+			// `constructor` 不是要净化的方法：包一层会让
+			// `wrapped.constructor === PiAiAdapter` 变成false、`.constructor.name`
+			// 变成空串（宿主里任何 class 身份判断或错误信息都可能用到）。
+			if (property === "constructor") return Reflect.get(target, property, receiver);
 			const value = Reflect.get(target, property, receiver);
 			if (typeof value !== "function") return value;
 			return function (...args) {

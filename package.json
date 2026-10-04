@@ -1,6 +1,6 @@
 {
   "name": "dsh-workbuddy-console",
-  "version": "2.0.9",
+  "version": "2.0.10",
   "description": "WorkBuddy console for DeepSeek Harness, in one plugin: the account/model pool (merged from dsh-workbuddy-xdpool), the skill market with an in-composer skill picker, batch check-in, pending tasks, session health, history and credit usage. Bilingual.",
   "license": "MIT",
   "author": "dhdbvcg",

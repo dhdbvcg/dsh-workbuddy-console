@@ -3,6 +3,36 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.10] - 2026-10-04
+
+### 清理
+
+- **删掉 2.0.8 加的 `settings.plugin.item` 注册**。
+
+  当时看到能用的第三方插件 `dsh-dafeiyu` 注册这个插槽，就照着加了。
+  后来在 asar 的 4420 个 js 文件里搜 `settings.plugin.item` —— **0 命中**，
+  DSH 里根本没有这个插槽，dafeiyu 那次注册其实是**静默失败**的
+  （它作者注释写的 "fail this card quietly" 就是这个意思）。
+
+  设置页本来就只走 `settings.section`，实测两张卡片
+  （`XD Pool` 与 `WorkBuddy 技能市场`）都能正常显示，留着那段只会误导。
+
+### 已验证可用
+
+重启后确认：
+
+| 项目 | 结果 |
+|---|---|
+| 账号池卡片 | 正常 —— 运行健康、3 个账号、提供端 `http://127.0.0.1:63611`、优先/均衡/轮询模式 |
+| 技能市场卡片 | 正常 —— 出现在设置导航 |
+| 9 条池路由 | 全部注册（`/wb-console/api/diag` 的 `poolRoutes` 逐条为 true） |
+| `poolError` | 空 |
+| 浏览器端上线 | `clientBoots` 有记录 |
+
+### 测试
+
+- 238 项，全绿
+
 ## [2.0.9] - 2026-10-04
 
 ### 修复：账号池卡片「池状态不可用：HTTP 404」

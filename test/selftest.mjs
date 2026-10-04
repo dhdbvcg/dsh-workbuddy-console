@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 
 const plugin = await import('../lib/index.js');
 
@@ -41,6 +42,40 @@ await t('导出 Config（少了它设置卡片会变成只读）', () => {
   assert.ok(
     plugin.Config !== null && (typeof plugin.Config === 'function' || typeof plugin.Config === 'object'),
     'Config 必须是 schemastery schema 对象',
+  );
+});
+
+await t('转发给 vendored 的是条目配置本身（不是空的 config.pool）', () => {
+  // 曾经写成 xdpoolModule.apply(ctx, config.pool || {})，
+  // 而条目配置长这样（我们导出的就是 vendored 的 Config schema）：
+  //   { modelSelectionCn: {...}, automationEarnings: {...} }
+  // 「pool」这个键根本不存在 → 实际传过去的是 {}，
+  // 于是 vendored 读不到任何设置：池的 selection 永远为空、模型永远全部启用；
+  // 卡片把勾选写进了设置文档它也读不到 → 刷新后又变回原样。
+  const real = { modelSelectionCn: { enabledModelIds: ['hy4-preview'] }, automationEarnings: {} };
+  const forwarded = plugin.poolConfigFrom(real);
+  assert.ok(
+    forwarded && forwarded.modelSelectionCn !== undefined,
+    '转发出去的配置丢了 modelSelectionCn：vendored 会读不到模型勾选',
+  );
+  assert.deepEqual(forwarded, real);
+
+  // 兼容：显式给了 pool 子对象就用它
+  assert.deepEqual(plugin.poolConfigFrom({ pool: { distribution: 'balanced' }, port: 1 }), { distribution: 'balanced' });
+  // 兜底
+  assert.deepEqual(plugin.poolConfigFrom(undefined), {});
+
+  // 接线检查：光有 poolConfigFrom 不够，apply 必须真的用它。
+  // （只测函数体的话，把调用点改回 config.pool 也照样通过 —— 试过。）
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');
+  assert.match(
+    src,
+    /xdpoolModule\.apply\(ctx,\s*poolConfigFrom\(config\)\)/,
+    'apply() 必须把 poolConfigFrom(config) 传给 vendored apply，否则池读不到设置',
+  );
+  assert.ok(
+    !/xdpoolModule\.apply\(ctx,\s*config\.pool\b/.test(src),
+    'apply() 不能直接传 config.pool（那个键不存在，等于传空对象）',
   );
 });
 

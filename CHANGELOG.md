@@ -3,6 +3,68 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.16] - 2026-10-04
+
+### 修复：转发给 vendored 的配置是空的（保存问题的最后一环）
+
+2.0.15 之后设置层已经通了 —— 探针显示条目进了 settings 文档：
+
+```
+namespaces: [..., "llm-workbuddy-xdpool"]
+exactMatch: true
+formStatus: "ready"
+formWritable: true
+```
+
+**但保存仍然不生效。** 继续查，发现是合并时写错了一行：
+
+```js
+const pool = xdpoolModule.apply(ctx, config.pool || {});   // ← 错
+```
+
+我们导出了 vendored 的 `Config` schema，所以**条目的 config 就是 vendored 的配置
+本身**，字段全在顶层：
+
+```yaml
+config:
+  modelSelectionCn: {...}      # ← 在顶层，不在 config.pool 里
+  automationEarnings: {...}
+```
+
+`pool` 这个键根本不存在 → 实际传过去的是**空对象** → 后果：
+
+- vendored 读不到任何设置 → `selection` 永远是 `{}`、模型永远"全部启用"
+- 卡片把勾选**确实写进了设置文档**，但 vendored 读的是我们传进去的那份死配置，
+  永远看不到变化 → 界面刷新后又变回原样
+- 全程不报错 —— 这正是「取消勾选 → 保存 → 又变回勾选」的直接原因
+
+**修法**：
+
+```js
+export function poolConfigFrom(config) {
+  if (!config || typeof config !== 'object') return {};
+  return config.pool && typeof config.pool === 'object' ? config.pool : config;
+}
+// …
+const pool = xdpoolModule.apply(ctx, poolConfigFrom(config));
+```
+
+保留 `config.pool` 的兼容分支，万一将来把池配置收进子对象也还能用。
+
+### 守卫
+
+`selftest` 增加一项，同时检查**函数行为**与**调用点接线**：
+
+- `poolConfigFrom({modelSelectionCn})` 必须原样返回（不能变成 `{}`）
+- `lib/index.js` 里必须是 `xdpoolModule.apply(ctx, poolConfigFrom(config))`
+
+第二项是必要的：只测函数体的话，把调用点改回 `config.pool` 测试照样通过
+（已实测）。加上接线检查后，改回旧写法立刻失败。
+
+### 测试
+
+- 248 → **249 项**，全绿
+
 ## [2.0.15] - 2026-10-04
 
 ### 修复：模型勾选保存不了（真正的根因）

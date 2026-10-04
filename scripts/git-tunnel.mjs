@@ -109,9 +109,11 @@ export function startTunnel() {
           tryNext();
           return;
         }
-        // 已经通了才出错 → 必须结束客户端，否则 git 一直等
+        // 已经通了才出错 → 必须结束客户端，否则 git 一直等。
+        // 用 end() 而不是 destroy()：destroy 会掐断 TLS，
+        // git 侧报 "schannel: server closed abruptly (missing close_notify)"。
         console.error('  [tunnel] ' + host + ' 传输中断: ' + (e.code || e.message));
-        clientSocket.destroy();
+        if (!clientSocket.destroyed) clientSocket.end();
       });
 
       // 上游正常关闭 → 让客户端也结束（不 destroy，交给 pipe 收尾）
@@ -130,24 +132,52 @@ export function startTunnel() {
   });
 }
 
-/** 跑一条 git 命令；stdio 继承，输出直接可见 */
-export function gitViaTunnel(proxyUrl, args, extraEnv = {}) {
+/**
+ * 跑一条 git 命令；stdio 继承，输出直接可见。
+ *
+ * 返回 { code, output }：output 是捕获到的 stderr/stdout 副本
+ * （git 的进度走 stderr，用 pipe 捕获后再转发，便于判定是否瞬时错误）。
+ */
+export function gitViaTunnel(proxyUrl, args, extraEnv = {}, { capture = false } = {}) {
   return new Promise((resolve) => {
     const p = spawn('git', ['-c', 'http.proxy=' + proxyUrl, ...args], {
       cwd: ROOT,
-      stdio: 'inherit',
+      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
       shell: false,
       env: { ...process.env, ...extraEnv },
     });
-    p.on('close', (code) => resolve(code));
+
+    if (!capture) {
+      p.on('close', (code) => resolve({ code, output: '' }));
+      return;
+    }
+
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; process.stdout.write(d); });
+    p.stderr.on('data', (d) => { out += d; process.stderr.write(d); });
+    p.on('close', (code) => resolve({ code, output: out }));
   });
 }
 
-// 直接执行时：把参数当 git 参数跑一遍
+/** 判断 git 失败是不是网络瞬断（重试即可，与仓库内容无关） */
+export function isTransientNetworkError(output) {
+  return /schannel|close_notify|CONNECT tunnel failed|502 Bad Gateway|Empty reply from server|early EOF|RPC failed|Could not resolve host|Connection reset|connection was reset|timed out|TLS|SSL_ERROR|EOF occurred|remote end hung up|Could not read from remote repository|unexpected disconnect|network is unreachable|The remote end hung up/i.test(
+    String(output || ''),
+  );
+}
+
+// 直接执行时：把参数当 git 参数跑一遍（瞬时网络错误自动重试）
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  const args = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  let retries = 4;
+  const ri = argv.indexOf('--retry');
+  if (ri >= 0) {
+    retries = Number(argv[ri + 1]) || 4;
+    argv.splice(ri, 2);
+  }
+  const args = argv;
   if (args.length === 0) {
-    console.error('用法: node scripts/git-tunnel.mjs <git 参数...>');
+    console.error('用法: node scripts/git-tunnel.mjs [--retry N] <git 参数...>');
     process.exit(2);
   }
 
@@ -171,7 +201,26 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
       }
     : { GIT_TERMINAL_PROMPT: '0' };
 
-  const code = await gitViaTunnel(url, args, env);
+  // 瞬时网络错误自动重试：git 的推送/拉取是幂等的，
+  // 失败重来不会写坏仓库；实测没有重试时失败率约 4/5。
+  let code = 1;
+  let output = '';
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    if (attempt > 1) console.log(`\n--- 第 ${attempt}/${retries} 次重试 ---`);
+    const r = await gitViaTunnel(url, args, env, { capture: true });
+    code = r.code;
+    output = r.output;
+    if (code === 0) break;
+    if (!isTransientNetworkError(output)) {
+      console.log('\n（不是网络错误，不重试）');
+      break;
+    }
+    if (attempt < retries) {
+      const wait = 3000 * attempt;
+      console.log(`（瞬时网络错误，${wait / 1000}s 后重试）`);
+      await new Promise((r2) => setTimeout(r2, wait));
+    }
+  }
 
   proxy.close();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 忽略 */ }

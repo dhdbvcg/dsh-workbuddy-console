@@ -168,6 +168,23 @@ if (!fs.existsSync(patchPath)) {
       if (dup.length) fail('存在重复 id: ' + [...new Set(dup)].join(', '));
       else ok('无重复 id');
 
+      // 同一个包名被多个 id 引用 = 插件被加载多次。
+      // 实测后果：apply() 跑两遍 → 第二次注册路由报
+      //   webserver: duplicate exact route "/wb-console"
+      // → 两个条目一起失败（插件列表显示「2 entries did not activate」）。
+      const byName = {};
+      for (const n of names) byName[n] = (byName[n] || 0) + 1;
+      const multi = Object.entries(byName).filter(([, c]) => c > 1);
+      if (multi.length) {
+        fail(
+          '同一个包被多个 id 引用，会被加载多次: ' +
+            multi.map(([n, c]) => `${n} × ${c}`).join(', ') +
+            ' —— 一个包只能有一个条目',
+        );
+      } else {
+        ok('每个包只被一个 id 引用（不会被重复加载）');
+      }
+
       // 引用的包必须存在：本地名要等于本包名，或能在 node_modules 解析到
       for (const n of names) {
         if (n === pkg.name) {

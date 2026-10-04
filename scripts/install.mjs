@@ -26,7 +26,16 @@ import { linkVendorDeps } from './link-vendor.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = path.resolve(HERE, '..');
 const PKG_NAME = 'dsh-workbuddy-console';
-const PLUGIN_ID = 'workbuddy-console';
+// 条目 id 必须是 llm-workbuddy-xdpool，不是包名：
+// vendored 的账号池卡片用它精确匹配设置命名空间（forms.get(entryId)），
+// 换成别的 id 卡片就变成只读。
+const PLUGIN_ID = 'llm-workbuddy-xdpool';
+// 旧版本（2.0.0~2.0.3）写入过 workbuddy-console 这个 id。
+// 两个 id 指向同一个包 = DSH 加载两次 = 第二次注册 /wb-console 报
+// "duplicate exact route"，两个条目一起失败。安装时要清掉。
+const LEGACY_PLUGIN_IDS = ['workbuddy-console'];
+// 合并前那个独立插件的包名；若 profile 里还留着指向它的条目，也要清掉（该包已卸载）
+const OLD_PKG_NAME = 'dsh-workbuddy-xdpool';
 
 //#region 输出
 
@@ -174,67 +183,98 @@ function updatePatch(profile, { remove = false } = {}) {
     return { ok: false };
   }
 
-  let text = fs.readFileSync(file, 'utf8');
-  const hasEntry = new RegExp(`^\\s*-\\s*id:\\s*${PLUGIN_ID}\\s*$`, 'm').test(text);
+  const raw = fs.readFileSync(file, 'utf8');
+
+  // 把文件切成「头部注释 + 若干条目块」，逐块处理后再拼回去。
+  // 用块解析而不是行内正则：注释与缩进写法多变，正则很难覆盖全。
+  const lines = raw.split(/\r?\n/);
+  const head = [];
+  const blocks = [];
+  let cur = null;
+  for (const l of lines) {
+    const m = /^-\s*id:\s*(\S+)/.exec(l);
+    if (m) {
+      if (cur) blocks.push(cur);
+      cur = { id: m[1], lines: [l] };
+    } else if (cur) {
+      cur.lines.push(l);
+    } else {
+      head.push(l);
+    }
+  }
+  if (cur) blocks.push(cur);
+
+  const nameOf = (b) => {
+    const m = /^\s*name:\s*(.+)$/m.exec(b.lines.join('\n'));
+    return m ? m[1].trim().replace(/^["']|["']$/g, '') : '';
+  };
+
+  // 指向「本插件」的条目：name 是本包名，或 id 是主/旧 id
+  const isOurs = (b) => nameOf(b) === PKG_NAME || b.id === PLUGIN_ID || LEGACY_PLUGIN_IDS.includes(b.id);
+  // 指向那个已被卸载的旧包的条目（合并前遗留），也要清掉，否则解析不到
+  const isStaleOld = (b) => nameOf(b) === OLD_PKG_NAME;
+
+  const before = blocks.map((b) => b.id);
+  let kept = blocks.filter((b) => !isStaleOld(b));
+  const removedStale = blocks.length - kept.length;
 
   if (remove) {
-    if (!hasEntry) {
+    const kept2 = kept.filter((b) => !isOurs(b));
+    const removed = kept.length - kept2.length;
+    if (removed === 0 && removedStale === 0) {
       info('cordis.patch.yml 里没有本插件，跳过');
       return { ok: true, changed: false };
     }
-
-    // 逐行删除整个块：可选的说明注释 + `- insert:` + id 行 + name 行。
-    // 用行扫描而不是正则，因为注释可能有多行，正则很难覆盖全部写法
-    // （之前用单行正则会把剩下的注释留在文件里）。
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-    const out = [];
-    // 记录本次插入前、由我们写入的注释行，便于一起删除
-    const OUR_COMMENT = /^#\s*(WorkBuddy 多账号控制台|WorkBuddy account console)/;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (/^\s*-\s*id:\s*workbuddy-console\s*$/.test(line)) {
-        // 向上吃掉属于我们的注释行与 "- insert:" 行
-        while (out.length) {
-          const prev = out[out.length - 1];
-          if (/^\s*-\s*insert:\s*$/.test(prev) || OUR_COMMENT.test(prev) || /^\s*#.*console/i.test(prev)) {
-            out.pop();
-            continue;
-          }
-          break;
-        }
-        // 吃掉紧随其后的 name 行
-        if (i + 1 < lines.length && /^\s*name:\s*dsh-workbuddy-console\s*$/.test(lines[i + 1])) i++;
-        // 吃掉紧接其后的空行，避免留下连续空行
-        if (i + 1 < lines.length && lines[i + 1].trim() === '' && out.length && out[out.length - 1].trim() === '') {
-          // 保留原有的空行结构即可
-        }
-        continue;
-      }
-      out.push(line);
-    }
-
-    // 折叠多余空行，并去掉文件末尾的空行（只保留一个换行）
-    let next = out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
-
-    if (!DRY) fs.writeFileSync(file, next);
-    return { ok: true, changed: true, action: 'removed' };
+    const out = [...head, ...kept2.flatMap((b) => b.lines)].join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+    if (!DRY) fs.writeFileSync(file, out);
+    return { ok: true, changed: true, action: 'removed', removed, removedStale };
   }
 
-  if (hasEntry) {
+  // 安装：本插件只保留一个条目
+  const ours = kept.filter(isOurs);
+  const primary = ours.find((b) => b.id === PLUGIN_ID) || ours[0];
+  const dropOurs = ours.filter((b) => b !== primary);
+
+  if (primary) {
+    // 已存在：确保 name 指向本包（旧版本可能写成别的）
+    const nm = nameOf(primary);
+    if (nm !== PKG_NAME) {
+      primary.lines = primary.lines.map((l) => (/^\s*name:\s*/.test(l) ? `  name: ${PKG_NAME}` : l));
+    }
+  } else {
+    kept.push({
+      id: PLUGIN_ID,
+      lines: [
+        `- id: ${PLUGIN_ID}`,
+        `  name: ${PKG_NAME}`,
+      ],
+    });
+  }
+
+  if (dropOurs.length) kept = kept.filter((b) => !dropOurs.includes(b));
+
+  const changed =
+    !primary ||
+    dropOurs.length > 0 ||
+    removedStale > 0 ||
+    (primary && nameOf(primary) !== PKG_NAME);
+
+  if (!changed) {
     info('cordis.patch.yml 已注册，跳过（幂等）');
     return { ok: true, changed: false };
   }
 
-  const block =
-    `\n# WorkBuddy 多账号控制台：页面挂在 DSH 自己的 webServer 上，\n` +
-    `# 所以 DSH 一启动就能访问 /wb-console，无需手动启动任何进程。\n` +
-    `- insert:\n` +
-    `    - id: ${PLUGIN_ID}\n` +
-    `      name: ${PKG_NAME}\n`;
-
-  const next = text.replace(/\s*$/, '\n') + block;
-  if (!DRY) fs.writeFileSync(file, next);
-  return { ok: true, changed: true, action: 'added' };
+  const out = [...head, ...kept.flatMap((b) => b.lines)].join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+  if (!DRY) fs.writeFileSync(file, out);
+  return {
+    ok: true,
+    changed: true,
+    action: primary ? 'updated' : 'added',
+    deduped: dropOurs.map((b) => b.id),
+    removedStale,
+    before,
+    after: kept.map((b) => b.id),
+  };
 }
 
 //#endregion

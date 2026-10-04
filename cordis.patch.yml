@@ -1,25 +1,23 @@
-# Register dsh-workbuddy-console as ONE plugin that provides both roles:
+# Register dsh-workbuddy-console — ONE entry, ONE load.
 #
-#   - llm-workbuddy-xdpool : the model pool provider (formerly a separate plugin)
-#   - workbuddy-console    : the console page + skill market
+# The entry id is llm-workbuddy-xdpool on purpose, not the package name:
+# the vendored account-pool card looks its own settings scope up by that exact
+# id (vendor/xdpool/lib/client.js, WORKBUDDY_POOL_ENTRY_ID), and its
+#   forms.get(entryId)
+# only returns a writable scope for an entry whose namespace matches it.
+# Renaming the id makes the pool card read-only.
 #
-# Both ids point at THIS package: the provider role is implemented by the
-# vendored xdpool runtime (vendor/xdpool/lib/index.js, MIT, (c) XDTrees —
-# see vendor/xdpool/LICENSE-ORIGINAL), which lib/index.js forwards to.
+# DO NOT add a second entry pointing at this same package.
+# DSH would then load the plugin twice, apply() would run twice, and the second
+# run fails with:
+#   webserver: duplicate exact route "/wb-console"
+# which takes down BOTH entries — that is the "2 entries did not activate"
+# failure seen in the plugin list.
+# One package, one entry.
 #
-# The llm-workbuddy-xdpool id must keep its exact name: the account-pool
-# settings card looks itself up by it to find its settings scope.
-#
-# Why one plugin instead of two:
-#   they share the same credential discovery, the same account pool and the
-#   same web server; splitting them meant two settings entries, two enable
-#   toggles and two things to keep in sync for no benefit.
-#
-# NOTE: YAML comments are '#' only — a previous revision used "/** */"
-# (JavaScript block-comment syntax) here, which is not a comment in YAML and
-# broke parsing: "end of the stream or a document separator is expected".
+# NOTE: YAML comments are '#' only. An earlier revision used "/** */"
+# (JavaScript block-comment syntax) here, which is NOT a comment in YAML and
+# broke parsing with "end of the stream or a document separator is expected".
 - insert:
     - id: llm-workbuddy-xdpool
-      name: dsh-workbuddy-console
-    - id: workbuddy-console
       name: dsh-workbuddy-console

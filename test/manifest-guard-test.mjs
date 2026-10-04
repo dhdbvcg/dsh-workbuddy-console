@@ -99,6 +99,21 @@ try {
   const dup = runCheck();
   if (dup.code !== 0) ok('重复 id 被拦下');
   else bad('重复 id 没被拦下');
+
+  // 真实故障：两个不同 id 指向同一个包 → DSH 加载两次 →
+  // 第二次注册 /wb-console 报 "duplicate exact route"，两个条目一起失败
+  fs.writeFileSync(
+    PATCH,
+    '- id: llm-workbuddy-xdpool\n  name: dsh-workbuddy-console\n- id: workbuddy-console\n  name: dsh-workbuddy-console\n',
+  );
+  const twice = runCheck();
+  if (twice.code !== 0) {
+    ok('同一个包被两个 id 引用被拦下');
+    if (/加载多次|只被一个/.test(twice.out)) ok('报错说明了「会被加载多次」');
+    else bad('拦下了但没说明原因');
+  } else {
+    bad('同一个包被两个 id 引用竟然通过了 —— 会导致 duplicate exact route');
+  }
 } finally {
   // --- 3. 无论成败都要恢复 ---
   fs.writeFileSync(PATCH, original);

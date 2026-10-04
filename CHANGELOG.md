@@ -3,6 +3,47 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.4] - 2026-10-04
+
+### 修复（严重）
+
+- **`2 entries did not activate` + `webserver: duplicate exact route "/wb-console"`。**
+
+  上一版修好 YAML 语法后，插件仍起不来。原因是条目设计错了：
+  我让**两个 id 指向同一个包**（`llm-workbuddy-xdpool` 和 `workbuddy-console`），
+  于是 DSH 把同一个插件**加载两次**，`apply()` 跑两遍，
+  第二次注册 `/wb-console` 路由时冲突，**两个条目一起失败**：
+
+  ```
+  2 entries did not activate
+  llm-workbuddy-xdpool (dsh-workbuddy-console): Error: webserver: duplicate exact route "/wb-console"
+  workbuddy-console  (dsh-workbuddy-console): Error: webserver: duplicate exact route "/wb-console"
+  ```
+
+  **正确做法：一个包只留一个条目。** 现在只插入 `llm-workbuddy-xdpool` 一个 id。
+
+- 顺带说明**为什么 id 不能改成包名**：vendored 的账号池卡片用这个 id
+  精确匹配设置命名空间（`forms.get(entryId)`），换成 `workbuddy-console`
+  就匹配不上，卡片会退化成只读。
+
+### 安装器
+
+- 条目 id 从 `workbuddy-console` 改为 `llm-workbuddy-xdpool`
+- 安装时会**自动清理**旧版本写入的重复条目（`workbuddy-console`）
+- 也会清掉指向**已卸载旧包**（`dsh-workbuddy-xdpool`）的条目，
+  以及把 `name` 修正回本插件 —— 覆盖 2.0.0~2.0.3 装坏的各种残留状态
+
+### 守卫
+
+- `check-manifest` 新增一条：**同一个包被多个 id 引用即失败**
+  （这正是本次故障，靠人眼看配置看不出来）
+- `manifest-guard-test` 增加对应用例，验证这条守卫真会触发
+- `installer-test` 增加 3 个用例：清重复条目 / 清失效条目 / 不动别人的条目
+
+### 测试
+
+- 218 → **224 项**，全绿
+
 ## [2.0.3] - 2026-10-04
 
 ### 修复（严重）

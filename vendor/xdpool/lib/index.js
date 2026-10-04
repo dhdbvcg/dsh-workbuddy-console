@@ -3402,23 +3402,39 @@ function hostCompatibleApi() {
 	};
 }
 /**
-* DSH 历史消息里，**非 user 角色**携带的图片块在 pi-ai 里没有对应的线格式
-* （工具结果是纯文本；assistant 结构化图片输出同样无法表示），宿主的
-* `PiAiAdapter.stream` 在调用 provider 之前就会抛
-* `UNSUPPORTED_CONTENT: pi-ai cannot represent an image in an in-history … message`。
-* 官方 DeepSeek 适配器能把这些图转成 handle+base64，所以同一段历史用官方模型没事、
-* 切到本插件就整个会话发不出去。
+* DSH 历史消息里的图片块，能不能随请求发给模型，取决于两件事：
 *
-* 宿主没有留历史改写钩子，所以唯一能动手的位置是 adapter 边界：
-* `downgradeToolImageBlocks` 在请求进入宿主转换器之前，把非 user 消息里的
-* 图片块替换成文字占位。历史图片属于旧上下文，降级成一行说明远好于整段会话
-* 硬失败；user 消息里的图片是 pi-ai 的受支持路径（走附件服务），保持原样。
+* 1. **角色**：pi-ai 只有 user 消息的图片有线格式（走附件服务）。工具结果里的
+*    图、assistant 的结构化图片输出都无法表示，宿主 `PiAiAdapter.stream` 在
+*    调用 provider 之前就抛
+*    `UNSUPPORTED_CONTENT: pi-ai cannot represent an image in an in-history … message`。
+* 2. **模型能力**：宿主第一道检查是「历史里有任何图 && 模型不支持 image 输入」
+*    就抛 `pi-ai model … does not support image input`。本池子并非所有模型都
+*    支持图片（卡片里每个模型都有独立的「图片输入」开关），所以同一段带图的
+*    历史换模型照样发不出去。
+*
+* 官方 DeepSeek 适配器能把工具结果里的图转成 handle+base64，所以同一段历史
+* 换官方模型没事 —— 这是 pi-ai 特有的严格，不是 DSH 全局限制。
+*
+* 宿主没有留历史改写钩子，唯一能动手的位置是 adapter 边界：请求进入宿主转换器
+* 之前，把「发不出去」的图片块原位替换成一行文字说明。
+*
+* @param messages DSH 历史消息
+* @param options.allowUserImages 模型支持图片时为 true（默认）—— 此时 user
+*   消息里的图片走受支持路径，一律保留；为 false 时连user 的图也降级，
+*   并用 userNote 说明原因，避免「模型看不见图」变成一句没有线索的静默丢失。
 */
-function downgradeToolImageBlocks(messages) {
+function downgradeUnsupportedImages(messages, options) {
+	const allowUserImages = options?.allowUserImages !== false;
+	const userNote = options?.userNote ?? "[图片未发送：当前模型不支持图片输入]";
 	let changed = false;
 	const out = [];
 	for (const message of messages) {
-		if (message === null || typeof message !== "object" || message.role === "user" || !Array.isArray(message.content)) {
+		if (message === null || typeof message !== "object" || !Array.isArray(message.content)) {
+			out.push(message);
+			continue;
+		}
+		if (message.role === "user" && allowUserImages) {
 			out.push(message);
 			continue;
 		}
@@ -3428,10 +3444,10 @@ function downgradeToolImageBlocks(messages) {
 			continue;
 		}
 		changed = true;
+		const note = message.role === "user" ? userNote : `[图片输出已省略（${images.length} 张）]`;
 		// 原位替换：图片块变成一行说明，块序不变 —— 工具结果里图文混排的
 		// 相对顺序对模型仍有意义。改成「过滤掉图片、末尾补一条」会把说明
 		// 挪到内容末尾，看起来像另一段输出。
-		const note = `[图片输出已省略（${images.length} 张）]`;
 		const kept = [];
 		for (const block of message.content) {
 			if (block?.type !== "image") {
@@ -3451,8 +3467,12 @@ function downgradeToolImageBlocks(messages) {
 * 用代理而不是逐方法重写：宿主在 `stream`（以及将来可能新增的入口）里读
 * `options.messages`，任何拿到带 `messages` 数组参数的方法都先过一遍净化。
 * 净化失败绝不吞掉原请求 —— 按原样放行，让宿主按它自己的语义报错。
+*
+* @param isImageCapable 判定某个模型能不能收图片。缺省（或返回非 false）时
+*   一律按「能」处理：宁可让宿主报它自己的错，也不要在判定不出来时
+*   悄悄把用户刚发的图丢掉。
 */
-function withToolImageDowngrade(adapter) {
+function withToolImageDowngrade(adapter, isImageCapable) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
 			const value = Reflect.get(target, property, receiver);
@@ -3460,7 +3480,9 @@ function withToolImageDowngrade(adapter) {
 			return function (...args) {
 				const patched = args.map((arg) => {
 					if (arg === null || typeof arg !== "object" || !Array.isArray(arg.messages)) return arg;
-					const next = downgradeToolImageBlocks(arg.messages);
+					const modelId = arg.model ?? arg.modelId;
+					const capable = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
+					const next = downgradeUnsupportedImages(arg.messages, { allowUserImages: capable });
 					return next === null ? arg : { ...arg, messages: next };
 				});
 				return Reflect.apply(value, target, patched);
@@ -3545,7 +3567,13 @@ function createWorkBuddyAdapter(options) {
 			resolveApiKey: async () => shim.token(),
 			resolveAttachments: () => options.ctx.get("attachments"),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
-		})),
+		}), (modelId) => {
+			// 判定不了就按「支持图片」处理：宿主会对未知模型报它自己的错，
+			// 而在这里猜错等于静默丢掉用户刚发的截图。
+			if (typeof modelId !== "string" || modelId === "") return true;
+			const info = catalog.find(modelId);
+			return info === void 0 || info.supportsImages === true;
+		}),
 		buildModels,
 		defaultEffort,
 		invalidate: () => {
@@ -7133,4 +7161,4 @@ function apply(ctx, config = {}) {
 	});
 }
 //#endregion
-export { downgradeToolImageBlocks, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };
+export { downgradeUnsupportedImages, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };

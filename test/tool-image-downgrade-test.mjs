@@ -34,7 +34,7 @@ const t = async (name, fn) => {
   try { await fn(); ok(name); } catch (e) { bad(name + ' —— ' + (e && e.message ? e.message : e)); }
 };
 const assert = (await import('node:assert/strict')).default;
-const { downgradeToolImageBlocks, withToolImageDowngrade, WorkBuddyCatalog, createWorkBuddyAdapter } = mod;
+const { downgradeUnsupportedImages, withToolImageDowngrade, WorkBuddyCatalog, createWorkBuddyAdapter } = mod;
 
 console.log('\n历史工具消息带图 → 仍可发请求');
 
@@ -44,7 +44,7 @@ const txt = (text) => ({ type: 'text', text });
 // ——— 1. 降级函数 ———
 
 await t('工具消息里的图片被换成文字占位，原文本保留', () => {
-  const out = downgradeToolImageBlocks([
+  const out = downgradeUnsupportedImages([
     { role: 'tool', content: [img(), txt('分析完成')] },
   ]);
   assert.strictEqual(out.length, 1);
@@ -53,37 +53,72 @@ await t('工具消息里的图片被换成文字占位，原文本保留', () =>
 });
 
 await t('工具消息只有图片时补一行占位说明（不留空内容）', () => {
-  const out = downgradeToolImageBlocks([{ role: 'tool', content: [img()] }]);
+  const out = downgradeUnsupportedImages([{ role: 'tool', content: [img()] }]);
   assert.strictEqual(out[0].content.length, 1);
   assert.match(out[0].content[0].text, /图片输出已省略/);
 });
 
 await t('assistant 消息里的结构化图片输出同样降级', () => {
-  const out = downgradeToolImageBlocks([{ role: 'assistant', content: [img()] }]);
+  const out = downgradeUnsupportedImages([{ role: 'assistant', content: [img()] }]);
   assert.ok(!out[0].content.some((b) => b.type === 'image'));
 });
 
 await t('user 消息里的图片原样保留（那是 pi-ai 的受支持路径）', () => {
   const messages = [{ role: 'user', content: [img(), txt('看这个')] }];
-  assert.strictEqual(downgradeToolImageBlocks(messages), null, 'user 图片不该被动');
+  assert.strictEqual(downgradeUnsupportedImages(messages), null, 'user 图片不该被动');
 });
 
 await t('没有图片时返回 null（快路径，不复制数组）', () => {
-  assert.strictEqual(downgradeToolImageBlocks([{ role: 'user', content: [txt('hi')] }]), null);
-  assert.strictEqual(downgradeToolImageBlocks([{ role: 'assistant', content: [txt('yo')] }]), null);
+  assert.strictEqual(downgradeUnsupportedImages([{ role: 'user', content: [txt('hi')] }]), null);
+  assert.strictEqual(downgradeUnsupportedImages([{ role: 'assistant', content: [txt('yo')] }]), null);
 });
 
 await t('多条消息混合：只动含图的那条，其余原样（同一引用）', () => {
   const a = { role: 'user', content: [txt('q')] };
   const b = { role: 'tool', content: [img(), txt('r')] };
-  const out = downgradeToolImageBlocks([a, b]);
+  const out = downgradeUnsupportedImages([a, b]);
   assert.strictEqual(out[0], a, '未受影响的消息应保持引用不变');
   assert.notStrictEqual(out[1], b, '被改动的消息应是新对象');
 });
 
 await t('空数组 / 非法项不炸', () => {
-  assert.strictEqual(downgradeToolImageBlocks([]), null);
-  assert.strictEqual(downgradeToolImageBlocks([null, void 0]), null, '无图时应返回 null（不改）');
+  assert.strictEqual(downgradeUnsupportedImages([]), null);
+  assert.strictEqual(downgradeUnsupportedImages([null, void 0]), null, '无图时应返回 null（不改）');
+});
+
+// ——— 1b. 模型不支持图片时，user 的图也要降级 ———
+// 宿主第一道检查是「历史里有任何图 && 模型不支持 image 输入」就抛
+// `pi-ai model … does not support image input`。本池子并非所有模型都收图
+//（卡片里每个模型都有独立的「图片输入」开关），所以只降级工具消息不够。
+
+await t('模型不支持图片：user 消息里的图也被降级，并说明原因', () => {
+  const out = downgradeUnsupportedImages([{ role: 'user', content: [img('att-u'), txt('看这个')] }], {
+    allowUserImages: false,
+  });
+  assert.ok(!out[0].content.some((b) => b.type === 'image'), '不该再留图片块');
+  assert.match(out[0].content[0].text, /不支持图片输入/, '应说明是模型能力所限');
+});
+
+await t('模型支持图片：user 消息里的图保留（默认行为）', () => {
+  const messages = [{ role: 'user', content: [img(), txt('看这个')] }];
+  assert.strictEqual(downgradeUnsupportedImages(messages), null, '支持图片时不该动 user 的图');
+  assert.strictEqual(
+    downgradeUnsupportedImages(messages, { allowUserImages: true }),
+    null,
+    '显式传 true 也不该动',
+  );
+});
+
+await t('不支持图片的模型：工具与 user 两侧都被降级，且用不同措辞', () => {
+  const out = downgradeUnsupportedImages(
+    [
+      { role: 'user', content: [img('att-u')] },
+      { role: 'tool', content: [img('att-t')] },
+    ],
+    { allowUserImages: false },
+  );
+  assert.match(out[0].content[0].text, /不支持图片输入/);
+  assert.match(out[1].content[0].text, /图片输出已省略/);
 });
 
 // ——— 2. 代理在宿主之前改参数 ———
@@ -113,6 +148,32 @@ await t('代理：不受影响的方法原样放行、非函数属性照常返�
   const wrapped = withToolImageDowngrade(fakeHost);
   assert.strictEqual(wrapped.id, 'workbuddy-xdpool');
   assert.deepStrictEqual(wrapped.listModels(), ['m']);
+});
+
+await t('代理：按模型能力决定 user 图片是否降级', () => {
+  const seenBy = new Map();
+  const fakeHost = {
+    stream(options) { seenBy.set(options.model, options.messages); return 'ok'; },
+  };
+  // 每次调用都要全新的数组：净化是「返回新数组」，复用同一个引用会让
+  // 两次调用看到同一份内容，测不出差别
+  const fresh = () => [{ role: 'user', content: [img()] }];
+
+  // 判定器：只有 with-image 收图
+  const wrapped = withToolImageDowngrade(fakeHost, (modelId) => modelId === 'with-image');
+  wrapped.stream({ model: 'with-image', messages: fresh() });
+  wrapped.stream({ model: 'no-image', messages: fresh() });
+
+  assert.ok(seenBy.get('with-image')[0].content.some((b) => b.type === 'image'), '支持图片的模型应保留 user 的图');
+  assert.ok(!seenBy.get('no-image')[0].content.some((b) => b.type === 'image'), '不支持图片的模型应连user 的图一起降级');
+});
+
+await t('代理：判定不出来时按「支持图片」处理（不静默丢用户的图）', () => {
+  const seen = [];
+  const fakeHost = { stream(options) { seen.push(options.messages); } };
+  const wrapped = withToolImageDowngrade(fakeHost, () => undefined);
+  wrapped.stream({ model: 'weird', messages: [{ role: 'user', content: [img()] }] });
+  assert.ok(seen[0][0].content.some((b) => b.type === 'image'), '判定不了就当支持，别擅自丢图');
 });
 
 // ——— 3. 端到端：真 PiAiAdapter + 真 provider + 本地 HTTP 当 shim ———
@@ -175,6 +236,62 @@ await t('端到端：带图历史不再抛 UNSUPPORTED_CONTENT，请求真的到
     const sent = received.at(-1).body;
     assert.ok(!/image_url|data:image/.test(sent), '请求体里不该再有图片');
     assert.match(sent, /图片输出已省略/, '请求体里应有降级说明');
+  } finally {
+    server.close();
+  }
+});
+
+await t('端到端：不支持图片的模型 + user 发了图 → 也能发出去', async () => {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      received.push(body);
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+
+  try {
+    const catalog = new WorkBuddyCatalog();
+    catalog.update([{
+      id: 'text-only',
+      name: '纯文本模型',
+      contextWindow: 200000,
+      maxOutputTokens: 32000,
+      supportsImages: false,
+      multiplier: 0.5,
+    }]);
+    const shim = { baseUrl: () => `http://127.0.0.1:${port}`, token: () => 'test-token' };
+    const { adapter } = createWorkBuddyAdapter({ shim, catalog, ctx: { get: () => undefined }, providerId: 'workbuddy-xdpool' });
+
+    // 用户刚发了一张图，但这个模型收不了 —— 以前整段会话直接报
+    // 「pi-ai model … does not support image input」
+    const messages = [
+      { role: 'user', content: [img('att-user'), txt('这张图里有段代码')] },
+      { role: 'assistant', content: [txt('我看看')], source: { kind: 'model' } },
+      { role: 'user', content: [txt('继续')] },
+    ];
+
+    let streamError;
+    try {
+      for await (const _event of adapter.stream({ provider: 'workbuddy-xdpool', model: 'text-only', messages })) {
+        // 只关心请求能否发出
+      }
+    } catch (e) {
+      streamError = e;
+    }
+    assert.ok(
+      streamError === undefined || !/does not support image input|UNSUPPORTED_CONTENT/.test(String(streamError?.message ?? '')),
+      `仍因图片失败：${streamError?.message}`,
+    );
+    assert.ok(received.length > 0, 'shim 没收到任何请求');
+    const sent = received.at(-1);
+    assert.ok(!/image_url|data:image/.test(sent), '请求体里不该有图片');
+    assert.match(sent, /不支持图片输入/, '应说明图没送出去的原因');
   } finally {
     server.close();
   }

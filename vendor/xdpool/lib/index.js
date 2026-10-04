@@ -3427,6 +3427,9 @@ function hostCompatibleApi() {
 function downgradeUnsupportedImages(messages, options) {
 	const allowUserImages = options?.allowUserImages !== false;
 	const userNote = options?.userNote ?? "[图片未发送：当前模型不支持图片输入]";
+	// 降级是静默的（模型只会看到一行说明），所以把丢弃计数交给调用方记日志 ——
+	// 否则用户只能从「模型怎么没看见我的图」倒推这里发生过什么。
+	const dropped = { images: 0, userImages: 0, historyImages: 0 };
 	let changed = false;
 	const out = [];
 	for (const message of messages) {
@@ -3444,6 +3447,8 @@ function downgradeUnsupportedImages(messages, options) {
 			continue;
 		}
 		changed = true;
+		dropped.images += images.length;
+		if (message.role === "user") dropped.userImages += images.length; else dropped.historyImages += images.length;
 		const note = message.role === "user" ? userNote : `[图片输出已省略（${images.length} 张）]`;
 		// 原位替换：图片块变成一行说明，块序不变 —— 工具结果里图文混排的
 		// 相对顺序对模型仍有意义。改成「过滤掉图片、末尾补一条」会把说明
@@ -3459,6 +3464,7 @@ function downgradeUnsupportedImages(messages, options) {
 		}
 		out.push({ ...message, content: kept });
 	}
+	if (changed) options?.onDrop?.(dropped);
 	return changed ? out : null;
 }
 /**
@@ -3471,8 +3477,9 @@ function downgradeUnsupportedImages(messages, options) {
 * @param isImageCapable 判定某个模型能不能收图片。缺省（或返回非 false）时
 *   一律按「能」处理：宁可让宿主报它自己的错，也不要在判定不出来时
 *   悄悄把用户刚发的图丢掉。
+* @param onDrop 收到 { images, userImages, historyImages } 计数，用于记日志。
 */
-function withToolImageDowngrade(adapter, isImageCapable) {
+function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
 			const value = Reflect.get(target, property, receiver);
@@ -3482,7 +3489,10 @@ function withToolImageDowngrade(adapter, isImageCapable) {
 					if (arg === null || typeof arg !== "object" || !Array.isArray(arg.messages)) return arg;
 					const modelId = arg.model ?? arg.modelId;
 					const capable = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
-					const next = downgradeUnsupportedImages(arg.messages, { allowUserImages: capable });
+					const next = downgradeUnsupportedImages(arg.messages, {
+						allowUserImages: capable,
+						onDrop: typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0,
+					});
 					return next === null ? arg : { ...arg, messages: next };
 				});
 				return Reflect.apply(value, target, patched);
@@ -3573,6 +3583,13 @@ function createWorkBuddyAdapter(options) {
 			if (typeof modelId !== "string" || modelId === "") return true;
 			const info = catalog.find(modelId);
 			return info === void 0 || info.supportsImages === true;
+		}, (modelId, dropped) => {
+			// 降级是静默的：模型只看到一行文字说明，用户若发现「模型没看见我的图」，
+			// 至少能从日志知道这里发生过什么、丢了几张。
+			const parts = [`${dropped.images} image(s) dropped before pi-ai conversion`];
+			if (dropped.userImages > 0) parts.push(`${dropped.userImages} from user messages (model lacks image input)`);
+			if (dropped.historyImages > 0) parts.push(`${dropped.historyImages} from tool/assistant history (pi-ai cannot represent them)`);
+			options.ctx.logger?.info?.(`dsh-workbuddy-xdpool: ${parts.join("; ")} (model ${modelId})`);
 		}),
 		buildModels,
 		defaultEffort,

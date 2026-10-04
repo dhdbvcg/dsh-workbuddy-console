@@ -38,6 +38,32 @@ v2.0.23 处理了「历史工具结果带图」，但宿主还有**第二道**�
   - 端到端新增 1 项：**不支持图片的模型 + user 发了图** → 请求依然到达 shim，
     请求体无图片、且带「不支持图片输入」说明
 
+### 审计：同一类「让会话彻底不可用的硬失败」其余两条
+
+顺着 v2.0.23/24 的思路把宿主对请求内容的断言都过了一遍，另外两条的结论是
+**不动**，理由一并记在这里免得重复排查：
+
+- **`tool-addition` / `tool-removal`（工具变更块）**：pi-ai 完全无法表示
+  （`Tool-change blocks require developer role`），但**官方 DeepSeek 适配器
+  同样拒绝**（`DeepSeek Messages cannot represent tool-change blocks`），
+  且 DSH 的会话格式要求这类块必须放在 developer 消息里 —— 所以这是 DSH 全局
+  行为而非本插件缺陷。剥掉它会静默改变工具声明的语义，在没有真实复现前不该猜。
+- **图片体积上限**（profile 的 `maxRequestImageBytes: 20MB`）：超限会抛
+  `IMAGE_OFFLOAD_REQUIRED`，但 `dsh-compaction-image-offload` 会捕获该信号、
+  自动降级最旧的图并重试 —— 是受支持的流程，不是死路，因此不设更小的预算。
+
+### 静默降级改为可诊断
+
+图片降级对模型是无声的（它只看到一行文字说明），用户若发现「模型怎么没看见
+我的图」只能靠猜。现在每次降级会经 `ctx.logger.info` 记一行：丢弃总数、其中
+来自 user 消息 / 来自工具历史各多少、以及当时的模型 id。无降级时不记日志。
+
+### 测试
+
+- `test/tool-image-downgrade-test.mjs` 18 项：新增 1 项锁住日志计数
+  （user 1 张 + 工具 2 张 → `{ images: 3, userImages: 1, historyImages: 2 }`，
+  且无降级时不上报）
+
 ## [2.0.23] - 2026-10-04
 
 ### 修复：历史里有图片的旧会话切到 WorkBuddy 模型就发不出去

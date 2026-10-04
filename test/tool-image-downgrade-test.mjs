@@ -176,6 +176,32 @@ await t('代理：判定不出来时按「支持图片」处理（不静默丢�
   assert.ok(seen[0][0].content.some((b) => b.type === 'image'), '判定不了就当支持，别擅自丢图');
 });
 
+await t('降级会报告丢弃计数（静默降级必须可诊断）', () => {
+  const seen = [];
+  const fakeHost = { stream(options) { seen.push(options.messages); } };
+  const dropped = [];
+  const wrapped = withToolImageDowngrade(fakeHost, (id) => id === 'with-image', (modelId, info) => dropped.push({ modelId, ...info }));
+  wrapped.stream({
+    model: 'no-image',
+    messages: [
+      { role: 'user', content: [img('u1'), txt('a')] },
+      { role: 'tool', content: [img('t1'), img('t2')] },
+    ],
+  });
+  assert.strictEqual(dropped.length, 1, '应恰好上报一次');
+  assert.deepStrictEqual(dropped[0], { modelId: 'no-image', images: 3, userImages: 1, historyImages: 2 });
+
+  // 支持图片的模型 + 只有工具图：也要报，但计数归到历史
+  dropped.length = 0;
+  wrapped.stream({ model: 'with-image', messages: [{ role: 'tool', content: [img('t3')] }] });
+  assert.deepStrictEqual(dropped[0], { modelId: 'with-image', images: 1, userImages: 0, historyImages: 1 });
+
+  // 无图时不报（否则每次请求都刷日志）
+  dropped.length = 0;
+  wrapped.stream({ model: 'with-image', messages: [{ role: 'user', content: [txt('hi')] }] });
+  assert.strictEqual(dropped.length, 0, '没降级就不该上报');
+});
+
 // ——— 3. 端到端：真 PiAiAdapter + 真 provider + 本地 HTTP 当 shim ———
 
 await t('端到端：带图历史不再抛 UNSUPPORTED_CONTENT，请求真的到达 shim', async () => {

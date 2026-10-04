@@ -3,6 +3,52 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.5] - 2026-10-04
+
+### 修复（严重）
+
+- **`1 entry did not activate` + `webserver: duplicate exact route "/wb-console"`。**
+
+  上两版把 YAML 和条目重复都修掉了，插件仍起不来。这次查清了真正原因。
+
+  `dsh-host-webserver` 的 `register()` 对同一个 `(kind, path)` **直接抛错**
+  （路径不做归一化，所以 `/wb-console` 与 `/wb-console/` 是不同键）：
+
+  ```js
+  if (table.has(route.path)) throw new Error(`webserver: duplicate ${route.kind} route "${route.path}"`);
+  ```
+
+  而 **DSH 自带 `hmr`**：配置或文件变化时插件会被重新 `apply`。
+  只要有一次「旧的 dispose 还没跑到、新的 apply 已经开始」，
+  第二次注册 `/wb-console` 就撞车 —— 整个插件激活失败，
+  界面上显示「异常 / 无法使用」。
+
+  **修法：`apply()` 幂等。** 现在用模块级的 `liveDispose` 记住「当前生效」
+  的那一次注册，新的一次 `apply` 开头先把上一次撤掉，
+  于是与宿主的重载顺序无关。
+
+### 怎么确认的（这次没有猜）
+
+- `dsh --profile <copy> --dump-config`（desktop 被 Electron 独占，
+  所以复制成一个换名 profile 来 dump）→ 实际生效的条目**只有 1 个**，
+  排除「配置里挂了两份」
+- 用 mock ctx 跑一次 `apply()` → 单次注册 **34 条路由，
+  `/wb-console` 只出现一次**，排除「插件自己注册两遍」
+- 读 asar 里 `dsh-host-webserver/lib/index.js` 的 `register()` →
+  确认「重复即抛」的严格语义
+- 结论只能是 **`apply()` 在本进程里被调用了两次**，且第一次的清理没跑到
+
+### 守卫
+
+- 新增 `test/apply-idempotent-test.mjs`（7 项）：用**与真实实现一致的
+  严格语义**（重复注册即抛）连续 `apply()` 两次，必须不抛错、路由不泄漏
+- 已验证这条测试**确实能抓到该 bug**：临时去掉修复后，
+  它报出的正是用户看到的 `webserver: duplicate exact route "/wb-console"`
+
+### 测试
+
+- 224 → **231 项**，全绿
+
 ## [2.0.4] - 2026-10-04
 
 ### 修复（严重）

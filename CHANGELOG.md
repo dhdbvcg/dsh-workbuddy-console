@@ -3,6 +3,42 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.14] - 2026-10-04
+
+### 诊断补全：采 `status`，并纠正一处误读
+
+读了 `dsh-client-ui-settings` 里 `ConfigFormController` 的实现，发现两件事：
+
+```js
+constructor(...) {
+  this.store = createSnapshotStore({
+    status: persistence === "host" ? "loading" : "unavailable",
+    writable: false,            // ← 初始就是 false
+    mode: persistence,
+  });
+}
+derive() {
+  const mirrored = this.mirror.getSnapshot();
+  if (mirrored.view === undefined) return;   // ← view 没加载就什么都不做
+  const { writable } = mirrored.view;        // ← writable 取自 describe view 顶层
+  const view = mirrored.view.namespaces.find((c) => c.ns === this.spec.namespace);
+  if (view === undefined) { /* status = "unavailable" */ return; }
+  ...
+}
+```
+
+1. **`writable: false` 很可能只是初始的 `loading` 状态** —— 我又测早了。
+   真正要看的是 `status`（`loading` / `unavailable` / `ready`），
+   而 2.0.12 的探针**没有采它**。本版补上 `formStatus` / `formMode` / `viewReady`。
+2. **纠正一处误读**：`forms.get(entryId)` 是**惰性创建**的 ——
+   对任何 id 都返回一个表单控制器。所以 2.0.12 里
+   `formFound: true` **不能证明命名空间存在**；真正的信号是
+   `view.namespaces` 里有没有它。
+
+### 测试
+
+- 239 项，全绿
+
 ## [2.0.13] - 2026-10-04
 
 ### 诊断加强（保存问题仍在）

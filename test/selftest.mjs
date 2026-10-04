@@ -31,6 +31,19 @@ await t('导出 name / inject / apply', () => {
   assert.deepEqual(plugin.inject, ['webServer', 'llm', 'settings']);
 });
 
+await t('导出 Config（少了它设置卡片会变成只读）', () => {
+  // 宿主按插件导出的 Config 生成配置表单；浏览器端的账号池卡片靠
+  // resolveSettingsScope() 拿到可写的 settingsScope 才写得进
+  // modelSelectionCn 等字段。
+  // 漏掉时不会报错，只会表现为「取消勾选 → 保存 → 又变回勾选」，
+  // 从外面几乎查不出来 —— 所以必须由测试盯住。
+  assert.ok(plugin.Config !== undefined, 'Config 未导出：设置卡片将无法保存');
+  assert.ok(
+    plugin.Config !== null && (typeof plugin.Config === 'function' || typeof plugin.Config === 'object'),
+    'Config 必须是 schemastery schema 对象',
+  );
+});
+
 console.log('\n路由注册');
 
 function harness(port) {

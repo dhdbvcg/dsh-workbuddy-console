@@ -3,6 +3,47 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.11] - 2026-10-04
+
+### 修复：模型勾选保存不了（取消勾选 → 保存 → 又变回勾选）
+
+**根因：本模块没有导出 vendored 的 `Config` schema。**
+
+宿主按插件导出的 `Config` 生成「配置表单」；浏览器端的账号池卡片靠
+`resolveSettingsScope()` 找到这个表单，拿到**可写的** `settingsScope`
+才写得进 `modelSelectionCn`：
+
+```js
+const key = activeRegion === "cn" ? "modelSelectionCn" : "modelSelectionGlobal";
+await write.call(settingsScope, key, { enabledModelIds, imageModelIds, contextBudgets });
+```
+
+我们合并时只导出了 `apply / inject / name`，于是这个条目**没有 schema**、
+没有配置表单，`settingsScope` 取不到 —— 卡片退化成只读，
+写入无处可去，界面重新读回来自然就是「又变回勾选」。
+
+**修法**（vendored 代码一行都不用改）：
+
+```js
+export const Config = xdpoolModule.Config;
+```
+
+`vendor/xdpool/lib/index.js` 本来就 `export { …, Config, … }`。
+
+### 为什么之前没人发现
+
+这个故障**不会报任何错**，只是保存静默失效。加了一条测试盯住它：
+
+```
+导出 Config（少了它设置卡片会变成只读）
+```
+
+并实测有效：临时去掉该导出后测试立刻失败。
+
+### 测试
+
+- 238 → **239 项**，全绿
+
 ## [2.0.10] - 2026-10-04
 
 ### 清理

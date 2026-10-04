@@ -71,6 +71,8 @@ const TESTS = [
   ['apply-idempotent-test.mjs', 'apply 幂等 / 重复注册路由 / 热重载'],
   ['model-availability-test.mjs', 'workbuddy 模型可用性 / 残留注册清理'],
   ['model-effort-test.mjs', '思考强度 / Max 模式 的目录侧行为'],
+  ['effort-pipeline-test.mjs', '设置 → 请求体 全链路（档位真的发出去）'],
+  ['selection-fields-test.mjs', 'selection 字段三处一致（schema/校验/保存）'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
   ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / 思考强度下拉 / Max 模式开关'],
@@ -152,6 +154,11 @@ for (const [file, desc] of TESTS) {
   const r = spawnSync(process.execPath, [path.join('test', file)], {
     cwd: linkDir,
     encoding: 'utf8',
+    // 关键：加超时。一个不退出的测试（比如浏览器测试里Chrome 起不来，
+    // CDP 轮询空转到天荒地老）会把整个套件永久挂住 —— 之前真的挂过一次，
+    // 25 分钟没有任何输出，只能强杀。超时后按崩溃计入并继续跑后面的。
+    timeout: 180_000,
+    killSignal: 'SIGKILL',
     // 关键：把数据目录指到临时位置。
     // 否则像 credit-samples 这类测试会写进用户真实的 ~/.dsh ——
     // 之前就是这样污染了用户的余额历史（多了 11 条 uid=a 的假记录）。

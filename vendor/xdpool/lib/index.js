@@ -6853,10 +6853,19 @@ function apply(ctx, config = {}) {
 		scheduler: () => core.scheduler.status(),
 		runAutomation: (_job, _force) => core.scheduler.startRunAll(),
 		saveSelection: async (region, selection) => {
+			// 逐字段构造而不是直接透传：数组与字典要浅拷贝（调用方可能继续改），
+			// 且**只搬运 parseSelection 校验过的字段** —— 透传会把未来新增但未校验的
+			// 键一起写进设置文件，那正是这张卡最早被绕开的地方。
+			//
+			// 少搬一个字段的后果很隐蔽：界面能改、保存按钮能按、没有报错，
+			// 但那个值从来没进过设置文档。所以每加一个 selection 字段，
+			// 这里必须同步加一行（parseSelection 与本函数成对改）。
 			const payload = {
 				...selection.enabledModelIds === void 0 ? {} : { enabledModelIds: [...selection.enabledModelIds] },
 				...selection.imageModelIds === void 0 ? {} : { imageModelIds: [...selection.imageModelIds] },
-				...selection.contextBudgets === void 0 ? {} : { contextBudgets: { ...selection.contextBudgets } }
+				...selection.contextBudgets === void 0 ? {} : { contextBudgets: { ...selection.contextBudgets } },
+				...selection.reasoningEfforts === void 0 ? {} : { reasoningEfforts: { ...selection.reasoningEfforts } },
+				...(selection.maxMode === void 0 ? {} : { maxMode: selection.maxMode })
 			};
 			await setSetting(modelSelectionKeyFor(region), payload, payload);
 		},

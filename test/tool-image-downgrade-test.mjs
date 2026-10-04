@@ -352,5 +352,39 @@ await t('代理：嵌套形状里的 messages 也能拦到（签名无关）', (
   assert.strictEqual(JSON.stringify(original), before, '不应就地修改调用方的对象');
 });
 
+await t('图片嵌在 tool-result.content 里也会被降级（真实会话形状）', () => {
+  // 回归：真实会话里工具结果不是「顶层 image 块」，而是
+  //   { role:'tool', content:[{ type:'tool-result', content:[ …, {type:'image'} ] }] }
+  // 宿主的 contentHasImage 是**递归**的
+  //（block.type === "image" || block.type === "tool-result" && contentHasImage(block.content)），
+  // 而净化器原来只扫顶层 -> 一个都没替换 -> 请求照旧失败。
+  const out = downgradeUnsupportedImages([{
+    role: 'tool',
+    content: [{
+      type: 'tool-result',
+      toolCallId: 't1',
+      content: [{ type: 'text', text: '截图:' }, { type: 'image', attachment: { attachmentId: 'a1' } }],
+    }],
+  }]);
+  const inner = out[0].content[0].content;
+  assert.ok(!inner.some((b) => b.type === 'image'), '嵌套图片未被降级');
+  assert.ok(inner.some((b) => b.type === 'text' && /图片输出已省略/.test(b.text)), '应写入降级说明');
+  // 外层结构保持不变（tool-result / toolCallId 不能丢）
+  assert.strictEqual(out[0].content[0].type, 'tool-result');
+  assert.strictEqual(out[0].content[0].toolCallId, 't1');
+});
+
+await t('多层嵌套与多个 tool-result 都能数对', () => {
+  const out = downgradeUnsupportedImages([{
+    role: 'tool',
+    content: [
+      { type: 'tool-result', content: [{ type: 'image', attachment: { attachmentId: 'a' } }] },
+      { type: 'tool-result', content: [{ type: 'image', attachment: { attachmentId: 'b' } }, { type: 'image', attachment: { attachmentId: 'c' } }] },
+    ],
+  }]);
+  const hasImage = (bs) => bs.some((b) => b.type === 'image' || (Array.isArray(b.content) && hasImage(b.content)));
+  assert.ok(!hasImage(out[0].content), '仍有图片残留');
+});
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

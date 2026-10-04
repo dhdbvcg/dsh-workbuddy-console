@@ -3,6 +3,48 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.26] - 2026-10-04
+
+### 修复：图片嵌在 tool-result 里，净化器漏掉了（这才是真正的根因）
+
+v2.0.25 改对了调用形状，但**仍然没修好** —— 真正的根因在另一层。
+
+关键发现：插件运行时解析到的 `@deepseek-ai/dsh-llm-pi-ai` 是 **npm 全局安装的
+DSH 0.1.5-rc.3**（不是 app.asar 里那份，两份代码不同）。它的判定是**递归**的：
+
+```js
+function contentHasImage(content) {
+  return content.some((block) => block.type === "image"
+    || block.type === "tool-result" && contentHasImage(block.content));
+}
+```
+
+即真实会话里工具结果的形状是
+`{ role: "tool", content: [{ type: "tool-result", content: [ …, {type:"image"} ] }] }`
+—— **图片嵌在 tool-result 内部**。我的净化器只扫顶层 content，一个都没替换，
+返回 null 原样放行，断言照抛。
+
+我的测试之所以一直「通过」：造的假数据是**顶层**图片，而真实会话是嵌套的。
+**端到端测试用了错的输入形状，等于没测。**
+
+修法：`replaceImages()` 递归进任何带 `content` 数组的块，原位替换并保持外层
+结构（`tool-result` / `toolCallId` 不丢）。
+
+### 验证（用插件运行时实际解析到的那份库）
+
+- 真实形状 + 真实库 → 请求到达 shim、请求体无图片、含降级说明
+- **反向验证**：临时禁掉递归 → 立刻复现「shim 收到 0 个请求」，与用户故障一致
+
+### 测试
+
+- `test/tool-image-downgrade-test.mjs` 21 项：新增 2 项锁住嵌套形状
+  （tool-result 内图片被降级且外层结构不变；多层嵌套与多个 tool-result 计数正确）
+
+### 教训
+
+**端到端测试的输入形状必须来自真实数据，不能凭想象构造。** 这次的假数据
+「看起来很合理」，于是测试绿灯、真机继续报错 —— 比没有测试更危险。
+
 ## [2.0.25] - 2026-10-04
 
 ### 修复：图片降级对「非标准调用形状」静默失效（用户实测报障）

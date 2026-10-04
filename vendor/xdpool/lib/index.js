@@ -3441,27 +3441,48 @@ function downgradeUnsupportedImages(messages, options) {
 			out.push(message);
 			continue;
 		}
-		const images = message.content.filter((block) => block?.type === "image");
-		if (images.length === 0) {
+		/**
+		* 递归找出这条消息里的所有图片块（含 `tool-result.content` 里的）。
+		*
+		* 这一步是被真实会话的形状逼出来的：DSH 的 `contentHasImage` 是**递归**的
+		* —— `block.type === "image" || block.type === "tool-result" && contentHasImage(block.content)`
+		* 而这里原来只扫顶层，于是嵌在 tool-result 里的图一个都没被替换，
+		* 净化器返回 null 原样放行，断言照抛 —— 症状是「代码改了，错误一字未变」。
+		*
+		* @returns {{ blocks: object[], count: number, note: string }}
+		*/
+		const replaceImages = (blocks, note) => {
+			let count = 0;
+			const next = blocks.map((block) => {
+				if (block?.type === "image") {
+					count += 1;
+					return { type: "text", text: note };
+				}
+				// tool-result 之类带 content 的容器：递归进去，原地替换
+				if (block !== null && typeof block === "object" && Array.isArray(block.content)) {
+					const inner = replaceImages(block.content, note);
+					if (inner.count === 0) return block;
+					count += inner.count;
+					return { ...block, content: inner.blocks };
+				}
+				return block;
+			});
+			return { blocks: next, count };
+		};
+		const images = message.content.filter((block) => block?.type === "image").length;
+		const probe = replaceImages(message.content, userNote);
+		if (probe.count === 0) {
 			out.push(message);
 			continue;
 		}
 		changed = true;
-		dropped.images += images.length;
-		if (message.role === "user") dropped.userImages += images.length; else dropped.historyImages += images.length;
-		const note = message.role === "user" ? userNote : `[图片输出已省略（${images.length} 张）]`;
-		// 原位替换：图片块变成一行说明，块序不变 —— 工具结果里图文混排的
-		// 相对顺序对模型仍有意义。改成「过滤掉图片、末尾补一条」会把说明
-		// 挪到内容末尾，看起来像另一段输出。
-		const kept = [];
-		for (const block of message.content) {
-			if (block?.type !== "image") {
-				kept.push(block);
-				continue;
-			}
-			// 连续多张图只留一条说明，避免刷屏
-			if (kept.length === 0 || kept.at(-1)?.text !== note) kept.push({ type: "text", text: note });
-		}
+		dropped.images += probe.count;
+		if (message.role === "user") dropped.userImages += probe.count; else dropped.historyImages += probe.count;
+		const note = message.role === "user" ? userNote : `[图片输出已省略（${probe.count} 张）]`;
+		// 原位替换：图片块变成一行说明，块序不变 —— 图文混排的相对顺序
+		// 对模型仍有意义。改成「过滤掉图片、末尾补一条」会把说明挪到内容末尾，
+		// 看起来像另一段输出。
+		const { blocks: kept } = replaceImages(message.content, note);
 		out.push({ ...message, content: kept });
 	}
 	if (changed) options?.onDrop?.(dropped);

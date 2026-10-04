@@ -3,6 +3,43 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.13] - 2026-10-04
+
+### 诊断加强（保存问题仍在）
+
+2.0.12 的探针拿到了第一份真实数据：
+
+```
+hasConfigForms: true
+namespaces: []
+formFound: true
+formWritable: false      ← 只读
+hasSettingsScope: false
+```
+
+也就是说：**配置表单确实生成了（2.0.11 导出 `Config` 起作用了），但它是只读的。**
+
+不过这份数据是**在 `apply()` 里同步取的**，而 settings 文档是异步加载的 ——
+很可能取到的是「还没加载完」的中间态。据此下结论会误判。
+
+本版因此：
+
+- 改成**三次采样**：`t+0` / `t+3s` / `t+12s`，各上报一次，看它怎么变
+- 增加 `docWritable` 与 `hasDocument`（`describe()` 的顶层字段），
+  用来判断 settings 文档本身有没有就绪
+- `namespaces` 取值加兜底（`view.namespaces ?? namespaces`）
+
+顺带确认的两处宿主事实（读 asar 源码）：
+
+- `dsh-settings` 的命名空间就是**条目 id**（`ns: entry.options.id`），
+  不是模块名 —— 所以把模块 `name` 改成 `workbuddy-console` 不影响它
+- `dsh-settings` 服务级 `writable` 是**硬编码 `true`**，
+  所以 `formWritable: false` 来自客户端 `configForms` 的 per-form 计算
+
+### 测试
+
+- 239 项，全绿
+
 ## [2.0.12] - 2026-10-04
 
 ### 诊断（保存问题仍在）

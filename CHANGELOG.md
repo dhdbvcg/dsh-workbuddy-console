@@ -3,6 +3,37 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.31] - 2026-10-05
+
+### 修复：上游拒绝历史旧图（`Image request width must be a positive integer`）
+
+v2.0.29 生效了 —— 调用级探针 + 降级日志双双证实：
+
+```
+image-downgrade.log:  model=hy4-preview images=1 sites=toolx1@depth1
+adapter-invocations.log:  prepareCall.<returned>.stream(object(messages:2057)) images=25
+```
+
+工具图降级成功、请求首次真正到达上游。但 25 张**保留的 user 历史图**里有一张
+被上游网关拒绝：`Image request width must be a positive integer`（该错误文本
+不在任何本地包里 —— 来自上游，旧附件的尺寸数据已失效/文件已不可解析）。
+
+### 修法：只保留最近几条消息里的 user 图片
+
+`downgradeUnsupportedImages` 新增 `keepLastMessages`（默认 3）：更早消息里的
+图片一律降级。产品依据：**12 天前历史里的截图对当前对话几乎没有价值**，
+而用户最近发的截图才是真正要保的；与其逐张排查 25 张旧附件哪个坏了，
+不如只保窗口内的。
+
+- 窗口内的 user 图照常走附件服务（pi-ai 受支持路径）
+- 窗口外的 user 图降级，带「图片未发送」说明
+- tool / assistant 图照旧全量降级
+
+### 教训
+
+这一层的修复是**顺着上一层的成功**找到的：请求通到上游之后，暴露的才是
+下一层的问题。分层剥洋葱时，每修好一层就立刻复测一次，别指望一次修完。
+
 ## [2.0.29] - 2026-10-05
 
 ### 修复：净化被 `prepareCall` 整条绕过 —— 调用级探针定位到的真正入口

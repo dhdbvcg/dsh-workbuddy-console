@@ -3449,17 +3449,29 @@ function appendImageDowngradeProbe(dropped) {
 function downgradeUnsupportedImages(messages, options) {
 	const allowUserImages = options?.allowUserImages !== false;
 	const userNote = options?.userNote ?? "[图片未发送：当前模型不支持图片输入]";
+	/**
+	* 只保留**最近几条消息**里的 user 图片。
+	*
+	* 这是被真实会话逼出来的第三个坑：修好前两层后请求终于到达上游，但
+	* 25 张历史图片里有一张被网关拒绝 ——「Image request width must be a
+	* positive integer」（错误文本不在任何本地包里，来自上游：旧附件的
+	* 尺寸数据已不可信/文件已失效）。与其逐张排查哪些旧附件坏了，不如
+	* 承认产品事实：**12 天前历史里的截图对当前对话几乎没有价值**，而
+	* 用户最近发的截图才是真正要保的。只保留最后 HISTORY_IMAGE_KEEP
+	* 条消息里的图片，更早的一律降级。
+	*/
+	const keepFrom = Math.max(0, messages.length - (options?.keepLastMessages ?? 3));
 	// 降级是静默的（模型只会看到一行说明），所以把丢弃计数交给调用方记日志 ——
 	// 否则用户只能从「模型怎么没看见我的图」倒推这里发生过什么。
 	const dropped = { images: 0, userImages: 0, historyImages: 0, sites: [], roles: [], model: void 0 };
 	let changed = false;
 	const out = [];
-	for (const message of messages) {
+	for (const [index, message] of messages.entries()) {
 		if (message === null || typeof message !== "object" || !Array.isArray(message.content)) {
 			out.push(message);
 			continue;
 		}
-		if (message.role === "user" && allowUserImages) {
+		if (message.role === "user" && allowUserImages && index >= keepFrom) {
 			out.push(message);
 			continue;
 		}

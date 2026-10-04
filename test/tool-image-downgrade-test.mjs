@@ -468,5 +468,26 @@ await t('端到端（宿主真实路径）：prepareCall 返回的 stream 也会
   } finally { server.close(); }
 });
 
+await t('旧历史里的 user 图片也降级，只留最近几条消息的（上游拒绝失效旧附件）', () => {
+  // 回归：2057 条消息、25 张历史图 —— 上游网关拒绝其中一张失效旧附件
+  //（"Image request width must be a positive integer"，文本来自上游而非本地包）。
+  // 与其逐张排查旧附件，不如只保留最近 3 条消息里的图：新截图要保，旧截图本就该弃。
+  const img = (id) => ({ type: 'image', attachment: { attachmentId: id } });
+  const messages = [
+    { role: 'user', content: [img('old-1'), txt('很久以前')] },
+    { role: 'assistant', content: [txt('好的')], source: { kind: 'model' } },
+    { role: 'user', content: [img('old-2'), txt('上周')] },
+    { role: 'assistant', content: [txt('嗯')], source: { kind: 'model' } },
+    { role: 'user', content: [img('new-1'), txt('刚刚发的')] },
+  ];
+  const out = downgradeUnsupportedImages(messages, { allowUserImages: true });
+  // 5 条消息、keepLastMessages=3 -> 只有最后 3 条（index>=2）保留图片
+  assert.strictEqual(out[0].content.some((b) => b.type === 'image'), false, 'index0 的旧图应被降级');
+  assert.strictEqual(out[2].content.some((b) => b.type === 'image'), true, 'index2 在最后 3 条窗口内，应保留');
+  assert.strictEqual(out[4].content.some((b) => b.type === 'image'), true, '最近消息里的图必须保留');
+  // 降级说明带原因
+  assert.match(out[0].content[0].text, /不支持图片输入|图片未发送/, 'user 图降级应有说明');
+});
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

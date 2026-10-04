@@ -3,6 +3,33 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.8] - 2026-10-04
+
+### 跟进：设置里看不到界面
+
+2.0.7 之后插件本体能加载了（插件列表显示「运行中」），
+但设置对话框里依然没有本插件的界面。
+
+服务端已确认没问题（`/wb-console` 返回 200）。怀疑点落在
+**浏览器端 bundle 有没有被加载 / 注册到正确的插槽**，于是做了三件事：
+
+1. **上线探针**：客户端 `apply()` 一执行就 `POST /wb-console/api/client-boot`。
+   服务端把最近 20 次记录放进 `/wb-console/api/diag` 的 `clientBoots` 字段。
+   这样能一句话确定问题在服务端还是浏览器端，不用再猜。
+
+2. **补注册 `settings.plugin.item`**：对比发现能正常显示界面的第三方插件
+   （`dsh-dafeiyu`）注册的是 `settings.plugin.item`（插件市场里的一张卡片），
+   而不是顶层 `settings.section`。现在两种形态都注册，各自 guard，
+   谁可用谁生效。
+
+3. **守卫移进回调内部**：宿主可能**异步**调用 `slots.inject` 的回调，
+   那时外层 `try` 早已结束、包不住里面的异常 —— 而注册抛错会连带
+   整个 WebUI 加载失败。`dsh-dafeiyu` 的作者也是踩了这个坑才这么写的。
+
+### 测试
+
+- 238 项，全绿
+
 ## [2.0.7] - 2026-10-04
 
 ### 修复（严重）：能自愈已经被卡住的进程

@@ -36,22 +36,46 @@ const ok = (m) => console.log('  ✓ ' + m);
 const bad = (m) => { console.log('  ✗ ' + m); fail++; };
 
 // ---- 1. 下载 ----
+// 刚发布的版本可能还在 npm 侧处理（CDN 尚未就绪，返回 404），所以重试几次
 console.log('=== 1. 下载已发布的 tarball ===');
 const tgz = path.join(os.tmpdir(), 'wb-published-' + Date.now() + '.tgz');
-const buf = await new Promise((resolve, reject) => {
-  const req = https.request(
-    { host: IP, port: 443, path: TARBALL, method: 'GET', servername: HOST, headers: { host: HOST }, timeout: 60000 },
-    (res) => {
-      if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-    },
-  );
-  req.on('timeout', () => req.destroy(new Error('timeout')));
-  req.on('error', reject);
-  req.end();
-});
+
+function fetchOnce() {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      { host: IP, port: 443, path: TARBALL, method: 'GET', servername: HOST, headers: { host: HOST, 'cache-control': 'no-cache' }, timeout: 60000 },
+      (res) => {
+        if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+let buf = null;
+let lastErr = null;
+for (let attempt = 1; attempt <= 8; attempt++) {
+  try {
+    buf = await fetchOnce();
+    break;
+  } catch (e) {
+    lastErr = e;
+    if (attempt < 8) {
+      console.log(`  第 ${attempt} 次失败（${e.message}），20s 后重试…`);
+      await new Promise((r) => setTimeout(r, 20000));
+    }
+  }
+}
+if (!buf) {
+  console.error('  ✗ 下载失败: ' + (lastErr && lastErr.message));
+  console.error('    刚发布的包可能需要几分钟才在 CDN 可见，稍后重跑本脚本即可。');
+  process.exit(1);
+}
 fs.writeFileSync(tgz, buf);
 ok(`下载 ${(buf.length / 1024).toFixed(1)} KB`);
 

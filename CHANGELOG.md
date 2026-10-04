@@ -3,6 +3,32 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.12] - 2026-10-04
+
+### 诊断（保存问题仍在）
+
+2.0.11 导出了 `Config` schema，重启后勾选保存**仍然失败**。
+
+已确认的事实：
+
+- `cordis.patch.yml` 的**内容与 mtime 都没变** —— 保存没有落到任何配置文件
+- 扫描 `.dsh` 近 30 分钟的全部写入：只有本插件自己的 `plugin-data`、
+  `hub.log`、以及 `cordis.yml`（profile 根骨架被重置成规范的 `[]`，
+  这按它自己的注释是正常的）—— **没有任何设置写入**
+- 所以写入是**被拒绝 / 无处可去**，不是被覆盖
+
+而写入走的是 `settingsScope.set(...)`，`settingsScope` 由 vendored 的
+`resolveSettingsScope()` 决定 —— 它取到了什么，**只有浏览器端知道**。
+
+本版给客户端加了诊断：`apply()` 时把 settings 作用域的真实状态
+（有无 `configForms`、命名空间清单、命中的条目 id、表单是否 `writable`、
+绑定的 namespace 是否可写）上报到 `/wb-console/api/diag` 的
+`clientBoots[].settingsScope`。下一次就不用再猜。
+
+### 测试
+
+- 239 项，全绿
+
 ## [2.0.11] - 2026-10-04
 
 ### 修复：模型勾选保存不了（取消勾选 → 保存 → 又变回勾选）

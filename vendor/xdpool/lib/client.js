@@ -274,6 +274,19 @@ window.__ModuleLoader__.load({
 .dsm-workbuddy-xdpool-model-budget{display:flex;align-items:center;gap:9px;flex:none;margin:0;padding:0;border:0;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:11px;line-height:16px}
 .dsm-workbuddy-xdpool-model-budget label{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
 .dsm-workbuddy-xdpool-model-budget input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+/* Per-model thinking-effort picker. Uses the host's own form tokens so the
+   select follows the active theme instead of looking bolted on. */
+.dsm-workbuddy-xdpool-model-effort{display:inline-flex;align-items:center;gap:5px;flex:none;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:11px;line-height:16px}
+.dsm-workbuddy-xdpool-model-effort select{max-width:96px;height:24px;padding:0 6px;border-radius:6px;border:1px solid var(--dsw-alias-border-secondary,rgba(174,179,187,.22));background:var(--dsw-alias-fill-quaternary,rgba(174,179,187,.08));color:var(--dsw-alias-label-primary,#e6e8eb);font-size:11px;line-height:22px;cursor:pointer}
+.dsm-workbuddy-xdpool-model-effort select:disabled{cursor:not-allowed;opacity:.5}
+.dsm-workbuddy-xdpool-model-maxmode{display:inline-flex;align-items:center;gap:5px;flex:none;cursor:pointer;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:11px;line-height:16px}
+.dsm-workbuddy-xdpool-model-maxmode input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+/* The region-wide Max 模式 switch, shown once above the model list. */
+.dsm-workbuddy-xdpool-maxmode{display:flex;align-items:center;gap:9px;flex:none;padding:7px 11px;border-radius:9px;border:1px solid var(--dsw-alias-border-secondary,rgba(174,179,187,.16));background:var(--dsw-alias-fill-quinary,rgba(174,179,187,.05))}
+.dsm-workbuddy-xdpool-maxmode input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
+.dsm-workbuddy-xdpool-maxmode-text{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dsm-workbuddy-xdpool-maxmode-label{color:var(--dsw-alias-label-primary,#e6e8eb);font-size:12px;line-height:16px}
+.dsm-workbuddy-xdpool-maxmode-hint{color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
 .dsm-workbuddy-xdpool-models-heading{display:flex;flex-direction:column;gap:2px;min-width:0}
 .dsm-workbuddy-xdpool-models-actions{display:flex;align-items:center;gap:8px;flex:none}
 
@@ -479,6 +492,7 @@ window.__ModuleLoader__.load({
 			const enabled = selection.enabledModelIds;
 			const images = selection.imageModelIds;
 			const budgets = selection.contextBudgets;
+			const efforts = selection.reasoningEfforts;
 			const out = {};
 			for (const model of status.models) {
 				const entry = {
@@ -487,6 +501,8 @@ window.__ModuleLoader__.load({
 				};
 				const budget = budgets?.[model.id];
 				if (budget !== void 0) entry.budget = budget;
+				const effort = efforts?.[model.id];
+				if (effort !== void 0) entry.effort = effort;
 				out[model.id] = entry;
 			}
 			return out;
@@ -497,12 +513,14 @@ window.__ModuleLoader__.load({
 			const enabled = new Set(selection.enabledModelIds ?? status.models.filter((m) => m.enabled).map((m) => m.id));
 			const images = new Set(selection.imageModelIds ?? status.models.filter((m) => m.supportsImages).map((m) => m.id));
 			const budgets = selection.contextBudgets ?? {};
+			const efforts = selection.reasoningEfforts ?? {};
 			for (const model of status.models) {
 				const entry = draft[model.id];
 				if (entry === void 0) continue;
 				if (entry.enabled !== enabled.has(model.id)) return true;
 				if (entry.images !== images.has(model.id)) return true;
 				if ((budgets[model.id] ?? model.nativeContextWindow) !== (entry.budget ?? model.nativeContextWindow)) return true;
+				if ((efforts[model.id] ?? "") !== (entry.effort ?? "")) return true;
 			}
 			return false;
 		}
@@ -614,6 +632,25 @@ window.__ModuleLoader__.load({
 				}));
 			};
 			const [savingModels, setSavingModels] = (0, react.useState)(false);
+			/**
+			* Draft for the region-wide Max 模式 switch, keyed by region for the same
+			* reason the model draft is.
+			*
+			* `undefined` means "not touched" — the saved value applies. It is tracked
+			* apart from the model draft because it is one switch for the whole region
+			* rather than a per-model row, but it still only reaches disk on Save so
+			* an accidental click is not written immediately.
+			*/
+			const [maxModeByRegion, setMaxModeByRegion] = (0, react.useState)({});
+			const maxModeDraft = maxModeByRegion[activeRegion];
+			const savedMaxMode = status?.selection?.maxMode === true;
+			const maxMode = maxModeDraft ?? savedMaxMode;
+			const setMaxMode = (next) => {
+				setMaxModeByRegion((prev) => ({
+					...prev,
+					[activeRegion]: next
+				}));
+			};
 			const mounted = (0, react.useRef)(true);
 			(0, react.useEffect)(() => {
 				mounted.current = true;
@@ -791,7 +828,7 @@ window.__ModuleLoader__.load({
 			const modelDraft = draft ?? (status === void 0 ? {} : draftFromStatus(status));
 			/** Model edits need a writable settings scope; otherwise the rows are read-only. */
 			const modelsEditable = settingsWritable;
-			const modelsDirty = draft !== void 0 && status !== void 0 && draftIsDirty(status, draft);
+			const modelsDirty = (draft !== void 0 && status !== void 0 && draftIsDirty(status, draft)) || maxMode !== savedMaxMode;
 			const enabledCount = Object.values(modelDraft).filter((entry) => entry.enabled).length;
 			const toggleModel = (id) => {
 				if (status === void 0) return;
@@ -819,23 +856,51 @@ window.__ModuleLoader__.load({
 					}
 				});
 			};
-			const setModelBudget = (id, budget) => {
-				if (status === void 0) return;
-				const base = draft ?? draftFromStatus(status);
-				const entry = base[id];
-				if (entry === void 0) return;
-				setDraft({
-					...base,
-					[id]: {
-						...entry,
-						budget
-					}
-				});
-			};
-			const discardModels = () => {
-				setDraft(void 0);
-				setFlash(void 0);
-			};
+const setModelBudget = (id, budget) => {
+			if (status === void 0) return;
+			const base = draft ?? draftFromStatus(status);
+			const entry = base[id];
+			if (entry === void 0) return;
+			setDraft({
+				...base,
+				[id]: {
+					...entry,
+					budget
+				}
+			});
+		};
+		/**
+		* Set (or clear, when `level` is undefined) one model's default thinking level.
+		*
+		* Clearing is what the "Default" option means: it drops the key entirely so
+		* the upstream's own default applies, rather than storing an empty string.
+		*/
+		const setModelEffort = (id, level) => {
+			if (status === void 0) return;
+			const base = draft ?? draftFromStatus(status);
+			const entry = base[id];
+			if (entry === void 0) return;
+			const next = { ...entry };
+			if (level === void 0) delete next.effort;
+			else next.effort = level;
+			setDraft({
+				...base,
+				[id]: next
+			});
+		};
+		const discardModels = () => {
+			setDraft(void 0);
+			// Drop the Max 模式 draft too: Discard means "back to what the server
+			// last reported", and leaving the switch flipped would make the Save
+			// button light up again on the next render.
+			setMaxModeByRegion((prev) => {
+				if (prev[activeRegion] === void 0) return prev;
+				const next = { ...prev };
+				delete next[activeRegion];
+				return next;
+			});
+			setFlash(void 0);
+		};
 			/**
 			* Persist the draft. The route validates the payload again on the host side,
 			* so a malformed draft is rejected there rather than silently stored. The
@@ -1012,13 +1077,34 @@ window.__ModuleLoader__.load({
 					const imageModelIds = Object.entries(draft).filter(([, e]) => e.images).map(([id]) => id);
 					const contextBudgets = {};
 					for (const [id, entry] of Object.entries(draft)) if (entry.budget !== void 0) contextBudgets[id] = entry.budget;
+					// Only persist efforts this model actually offers. A stale id (a
+					// model removed upstream) or a level it never supported would
+					// otherwise sit in the settings file forever, and the card would
+					// render a select whose value matches no option.
+					const reasoningEfforts = {};
+					for (const [id, entry] of Object.entries(draft)) {
+						if (entry.effort === void 0) continue;
+						const info = status.models.find((m) => m.id === id);
+						const offered = info !== void 0 && Array.isArray(info.supportedEfforts) ? info.supportedEfforts : [];
+						const okLevel = entry.effort === "off" || offered.includes(entry.effort);
+						if (okLevel) reasoningEfforts[id] = entry.effort;
+					}
 					const key = activeRegion === "cn" ? "modelSelectionCn" : "modelSelectionGlobal";
 					await write.call(settingsScope, key, {
 						enabledModelIds,
 						imageModelIds,
-						contextBudgets
+						contextBudgets,
+						reasoningEfforts,
+						maxMode: maxModeDraft
 					});
 					setDraft(void 0);
+					// Same after a successful save: the saved state is now the truth.
+					setMaxModeByRegion((prev) => {
+						if (prev[activeRegion] === void 0) return prev;
+						const next = { ...prev };
+						delete next[activeRegion];
+						return next;
+					});
 					if (mounted.current) setFlash(t?.("row.modelsSaved") ?? "Saved");
 				} catch (cause) {
 					if (mounted.current) setError(t?.("row.modelsSaveError", { message: cause instanceof Error ? cause.message : String(cause) }) ?? String(cause));
@@ -1428,9 +1514,29 @@ window.__ModuleLoader__.load({
 										total: status?.models.length ?? 0
 									}) ?? `${enabledCount} / ${status?.models.length ?? 0} enabled`
 								})]
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								className: "dsm-workbuddy-xdpool-models-actions",
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+							className: "dsm-workbuddy-xdpool-maxmode",
+							title: t?.("row.modelMaxModeHint") ?? "Give every model its full context window and strongest thinking level",
+							children: [(0, react_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: maxMode,
+								disabled: !modelsEditable,
+								onChange: (event) => {
+									setMaxMode(event.target.checked);
+								}
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+								className: "dsm-workbuddy-xdpool-maxmode-text",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: "dsm-workbuddy-xdpool-maxmode-label",
+									children: t?.("row.modelMaxMode") ?? "Max mode"
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: "dsm-workbuddy-xdpool-maxmode-hint",
+									children: t?.("row.modelMaxModeHint") ?? "Full context window and strongest thinking for every model"
+								})]
+							})]
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "dsm-workbuddy-xdpool-models-actions",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "dsm-btn dsm-btn-outline",
 									disabled: !modelsDirty || savingModels,
@@ -1456,9 +1562,11 @@ window.__ModuleLoader__.load({
 									images: model.supportsImages
 								},
 								editable: modelsEditable,
+								maxMode,
 								onToggle: toggleModel,
 								onToggleImage: toggleModelImage,
-								onBudget: setModelBudget
+								onBudget: setModelBudget,
+								onEffort: setModelEffort
 							}, model.id))
 						})]
 					}) : null
@@ -1797,18 +1905,41 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
+		* The thinking levels this model offers, in escalation order, paired with
+		* their display names.
+		*
+		* `off` is always offered: it is the only way to say "do not think" for a
+		* model that can think. Levels the model does not advertise are left out, so
+		* the picker can never offer something the upstream would reject.
+		*/
+		function effortOptions(model, t) {
+			const offered = Array.isArray(model.supportedEfforts) ? model.supportedEfforts : [];
+			const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+			const out = [];
+			for (const level of levels) {
+				if (level !== "off" && !offered.includes(level)) continue;
+				out.push({ level, name: t?.("row.effort." + level) ?? level });
+			}
+			return out;
+		}
+		/**
 		* One model row.
 		*
 		* Read-only when the card has no writable settings scope: the checkbox and the
 		* context radios stay disabled rather than pretending an edit took hold. The
 		* draft lives in the parent, so this component only ever reports intent.
 		*/
-		function ModelRow({ model, t, draft, editable, onToggle, onToggleImage, onBudget }) {
+		function ModelRow({ model, t, draft, editable, maxMode, onToggle, onToggleImage, onBudget, onEffort }) {
 			const tag = tagFor(model);
 			const tagText = tag === "free" ? t?.("row.free") ?? "free" : tag === "limited" ? t?.("row.limitedFree") ?? "limited free" : tag === "night" ? t?.("row.nightDiscount") ?? "night" : null;
 			const native = model.nativeContextWindow;
 			const capped = native > DEFAULT_CONTEXT_BUDGET;
 			const currentBudget = draft.budget ?? native;
+			const efforts = effortOptions(model, t);
+			// While Max 模式 is on it owns the thinking level, so the per-model
+			// picker would be lying: show it disabled and explain why.
+			const effortLocked = maxMode === true || efforts.length <= 1;
+			const currentEffort = draft.effort ?? "";
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: `dsm-workbuddy-xdpool-model${draft.enabled ? "" : " dsm-workbuddy-xdpool-model-off"}`,
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1868,6 +1999,26 @@ window.__ModuleLoader__.load({
 									onBudget(model.id, native);
 								}
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: formatCapacity(native) })] })]
+						}) : null, efforts.length > 1 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+							className: "dsm-workbuddy-xdpool-model-effort",
+							title: maxMode === true ? t?.("row.modelMaxModeHint") ?? "Max mode owns the thinking level" : t?.("row.modelReasoning", { efforts: model.supportedEfforts.join(" / ") }) ?? "Thinking",
+							children: [(0, react_jsx_runtime.jsx)("span", { children: t?.("row.modelEffort") ?? "Thinking" }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("select", {
+								value: currentEffort,
+								disabled: !editable || effortLocked,
+								"aria-label": `${t?.("row.modelEffort") ?? "Thinking"} — ${model.name}`,
+								onChange: (event) => {
+									const next = event.target.value;
+									if (next === "") onEffort(model.id, void 0);
+									else onEffort(model.id, next);
+								},
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+									value: "",
+									children: t?.("row.modelEffortAuto") ?? "Default"
+								}), ...efforts.map((option) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+									value: option.level,
+									children: option.name
+								}))]
+							})]
 						}) : null]
 					})]
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1884,7 +2035,13 @@ window.__ModuleLoader__.load({
 						model.supportedEfforts === void 0 || model.supportedEfforts.length === 0 ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: "dsm-workbuddy-xdpool-model-cap",
 							children: t?.("row.modelReasoning", { efforts: model.supportedEfforts.join(" / ") }) ?? model.supportedEfforts.join(" / ")
-						})
+						}),
+						// Under Max 模式 the ladder text is misleading (the strongest
+						// level is what will actually be used), so name that instead.
+						maxMode === true ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "dsm-workbuddy-xdpool-model-meta-tag",
+							children: t?.("row.modelMaxMode") ?? "Max mode"
+						}) : null
 					]
 				})]
 			});
@@ -2016,6 +2173,17 @@ window.__ModuleLoader__.load({
 			"row.modelContextCapped": "{size}",
 			"row.modelOutput": "Output {size}",
 			"row.modelReasoning": "Thinking: {efforts}",
+			"row.modelEffort": "Thinking",
+			"row.modelEffortAuto": "Default",
+			"row.modelMaxMode": "Max mode",
+			"row.modelMaxModeHint": "Give every model its full context window and strongest thinking level",
+			"row.effort.off": "Off",
+			"row.effort.minimal": "Minimal",
+			"row.effort.low": "Low",
+			"row.effort.medium": "Medium",
+			"row.effort.high": "High",
+			"row.effort.xhigh": "Extra high",
+			"row.effort.max": "Maximum",
 			"row.modelsEnabledCount": "{enabled} / {total} enabled",
 			"row.modelsSave": "Save",
 			"row.modelsSaving": "Saving…",
@@ -2155,6 +2323,17 @@ window.__ModuleLoader__.load({
 			"row.modelContextCapped": "{size}",
 			"row.modelOutput": "输出 {size}",
 			"row.modelReasoning": "思考档位：{efforts}",
+			"row.modelEffort": "思考强度",
+			"row.modelEffortAuto": "默认",
+			"row.modelMaxMode": "Max 模式",
+			"row.modelMaxModeHint": "让每个模型都用满上下文窗口与最强思考档位",
+			"row.effort.off": "关闭",
+			"row.effort.minimal": "极简",
+			"row.effort.low": "低",
+			"row.effort.medium": "中",
+			"row.effort.high": "高",
+			"row.effort.xhigh": "超高",
+			"row.effort.max": "极致",
 			"row.modelsEnabledCount": "已启用 {enabled} / {total}",
 			"row.modelsSave": "保存",
 			"row.modelsSaving": "保存中…",

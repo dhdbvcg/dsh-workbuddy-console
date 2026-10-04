@@ -3090,13 +3090,19 @@ var WorkBuddyCatalog = class {
 	*
 	* An absent `enabledModelIds` means "everything" — a fresh install with no
 	* saved selection must not present an empty picker.
+	*
+	* `maxMode` lifts every cap at once: the advertised window returns to the
+	* model's native maximum and any per-model budget is ignored. It mirrors the
+	* WorkBuddy client's own "Max 模式" switch, where one toggle means "give me
+	* everything this model has". Reasoning effort is NOT touched here — a model
+	* that supports thinking still respects its own ladder.
 	*/
 	visible() {
 		const enabled = this.selection.enabledModelIds;
 		const allow = enabled === void 0 ? void 0 : new Set(enabled);
 		const images = this.selection.imageModelIds;
 		const imageSet = images === void 0 ? void 0 : new Set(images);
-		const budgets = this.selection.contextBudgets;
+		const budgets = this.maxModeActive() ? void 0 : this.selection.contextBudgets;
 		return this.models.filter((model) => allow === void 0 || allow.has(model.id)).map((model) => {
 			const next = { ...model };
 			if (imageSet !== void 0) next.supportsImages = next.supportsImages || imageSet.has(model.id);
@@ -3104,6 +3110,45 @@ var WorkBuddyCatalog = class {
 			if (budget !== void 0 && budget > 0 && budget < next.contextWindow) next.contextWindow = budget;
 			return next;
 		});
+	}
+	/**
+	* Whether the region's Max 模式 switch is on.
+	*
+	* Read through the selection rather than cached, because the settings document
+	* is edited in place: a running instance has to observe the change without
+	* being remounted (same reason `unwrapVolatile` exists for the host side).
+	*/
+	maxModeActive() {
+		return this.selection.maxMode === true;
+	}
+	/**
+	* The thinking level this model should use by default, or undefined to let
+	* the upstream decide.
+	*
+	* A level the model does not actually advertise is dropped here rather than
+	* sent: pi-ai answers an unsupported effort with UNSUPPORTED_REASONING_EFFORT,
+	* which would turn a stale saved value into a hard failure on every request.
+	*/
+	defaultEffortFor(model) {
+		const wanted = this.selection.reasoningEfforts?.[model.id];
+		if (wanted === void 0) return void 0;
+		const offered = model.supportedEfforts;
+		if (!Array.isArray(offered) || offered.length === 0) return void 0;
+		if (wanted === "off") return "off";
+		return offered.includes(wanted) ? wanted : void 0;
+	}
+	/** The strongest level this model advertises, for the Max 模式 override. */
+	topEffortFor(model) {
+		const offered = model.supportedEfforts;
+		if (!Array.isArray(offered) || offered.length === 0) return void 0;
+		// Walk the ladder from the strongest end. SELECTION_EFFORTS is in
+		// escalation order, so a forward scan would return the WEAKEST level the
+		// model offers — which is the exact opposite of what Max 模式 promises.
+		for (let i = SELECTION_EFFORTS.length - 1; i >= 0; i -= 1) {
+			const level = SELECTION_EFFORTS[i];
+			if (level !== "off" && offered.includes(level)) return level;
+		}
+		return void 0;
 	}
 	/** Replace the catalog and notify the adapter to rebuild its model list. */
 	update(models) {
@@ -3365,6 +3410,31 @@ function createWorkBuddyAdapter(options) {
 		}),
 		getModels: () => buildModels()
 	};
+	/**
+	* The thinking level a request for `modelId` should use when the caller names
+	* none, or undefined to leave the upstream default alone.
+	*
+	* DSH's `profile.reasoning` is provider-wide, so it cannot express "Space-Bunny
+	* runs hot, Hy3 runs cool". The per-model choice therefore travels on the
+	* request instead: the shim reads this and fills in `reasoning_effort` when
+	* pi-ai left it out. Reading the catalog on every call (rather than capturing
+	* a value at build time) keeps a settings edit live without a rebuild.
+	*
+	* Returns undefined whenever the answer is not safely deliverable — an unknown
+	* model, a level the model does not advertise, or a stale saved value — so we
+	* never inject an effort the upstream would reject.
+	*/
+	const defaultEffort = (modelId) => {
+		if (typeof modelId !== "string" || modelId === "") return void 0;
+		const info = catalog.find(modelId);
+		if (info === void 0) return void 0;
+		if (catalog.maxModeActive()) {
+			// Max 模式 means "everything this model has": strongest thinking level.
+			const top = catalog.topEffortFor(info);
+			if (top !== void 0) return top;
+		}
+		return catalog.defaultEffortFor(info);
+	};
 	const profile = {
 		provider: providerId,
 		displayName,
@@ -3387,6 +3457,7 @@ function createWorkBuddyAdapter(options) {
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
 		}),
 		buildModels,
+		defaultEffort,
 		invalidate: () => {
 			profiles = /* @__PURE__ */ new Map([[providerId, profile]]);
 		}
@@ -5278,6 +5349,49 @@ function createWorkBuddyShim(options) {
 		}
 	}
 	/**
+	* Fill in `reasoning_effort` when the caller did not choose a level.
+	*
+	* pi-ai only sends the field when the request carries an explicit effort, so a
+	* user who never opens the effort picker gets whatever the upstream decides.
+	* The card's per-model choice (and Max 模式) is applied here instead: reading
+	* the catalog per request means a settings edit takes effect on the very next
+	* message, with no adapter rebuild.
+	*
+	* Three cases are deliberately left alone:
+	*   - the body already names an effort (an explicit per-message choice wins)
+	*   - the model is unknown or advertises no ladder (nothing safe to send)
+	*   - the saved level is not one this model offers (a stale value must not
+	*     turn every request into an upstream error)
+	*
+	* A body we cannot parse, or that is not a plain object, is passed through
+	* untouched: this is a best-effort default, never a gate.
+	*/
+	function applyDefaultEffort(prepared, modelId) {
+		let body;
+		try {
+			body = JSON.parse(prepared);
+		} catch {
+			return prepared;
+		}
+		if (typeof body !== "object" || body === null || Array.isArray(body)) return prepared;
+		const existing = body["reasoning_effort"];
+		if (typeof existing === "string" && existing !== "") return prepared;
+		const info = typeof modelId === "string" && modelId !== "" ? catalog.find(modelId) : void 0;
+		if (info === void 0) return prepared;
+		let level;
+		if (catalog.maxModeActive()) level = catalog.topEffortFor(info);
+		else level = catalog.defaultEffortFor(info);
+		// "off" is meaningful to the picker but has no wire value: pi-ai models
+		// absence as "do not think", so leaving the field out is exactly right.
+		if (level === void 0 || level === "off") return prepared;
+		body["reasoning_effort"] = level;
+		try {
+			return JSON.stringify(body);
+		} catch {
+			return prepared;
+		}
+	}
+	/**
 	* Serve one chat completion, rotating accounts on rate limits.
 	*
 	* A rate-limited account is cooled for exactly the window the upstream
@@ -5290,7 +5404,6 @@ function createWorkBuddyShim(options) {
 			return;
 		}
 		const raw = (await readBody(req)).toString("utf8");
-		const prepared = client.prepareChatBody(raw);
 		const controller = new AbortController();
 		req.on("close", () => controller.abort());
 		let modelId;
@@ -5300,6 +5413,7 @@ function createWorkBuddyShim(options) {
 		} catch {
 			modelId = void 0;
 		}
+		const prepared = applyDefaultEffort(client.prepareChatBody(raw), modelId);
 		const tried = [];
 		let last;
 		let exhaustedByRateLimit = false;
@@ -5701,6 +5815,15 @@ function readJsonBody(req) {
 	});
 }
 /**
+* The thinking levels a selection may name, in escalation order.
+*
+* These are pi-ai's own level ids (`THINKING_LEVELS` in @deepseek-ai/dsh-llm-pi-ai),
+* NOT the upstream's wire values: `thinkingLevelMap` translates one into the other.
+* Validating against this list means a typo is rejected at the route instead of
+* silently producing a model whose effort selector shows nothing selected.
+*/
+const SELECTION_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/**
 * Validate an untrusted selection payload.
 *
 * Returns undefined for anything malformed so the route answers 400 instead of
@@ -5731,6 +5854,25 @@ function parseSelection(body) {
 			map[id] = raw;
 		}
 		out.contextBudgets = map;
+	}
+	// Per-model default thinking level: { [modelId]: "low" | ... | "off" }
+	const efforts = body["reasoningEfforts"];
+	if (efforts !== void 0) {
+		if (typeof efforts !== "object" || efforts === null || Array.isArray(efforts)) return void 0;
+		const map = {};
+		for (const [id, raw] of Object.entries(efforts)) {
+			if (id === "") return void 0;
+			// An unknown level is a client bug; refuse the whole write rather than
+			// persist a value the card then cannot render back.
+			if (typeof raw !== "string" || !SELECTION_EFFORTS.includes(raw)) return void 0;
+			map[id] = raw;
+		}
+		out.reasoningEfforts = map;
+	}
+	const maxMode = body["maxMode"];
+	if (maxMode !== void 0) {
+		if (typeof maxMode !== "boolean") return void 0;
+		out.maxMode = maxMode;
 	}
 	return out;
 }
@@ -6422,7 +6564,9 @@ function unwrapVolatileDeep(value) {
 const modelSelectionSchema = z.object({
 	enabledModelIds: z.array(z.string()).description("Model ids enabled in this region's picker (absent = all)"),
 	imageModelIds: z.array(z.string()).description("Model ids accepting image input in this region (absent = follow upstream)"),
-	contextBudgets: z.dict(z.number().step(1).min(1)).description("Per-model context-window override for this region")
+	contextBudgets: z.dict(z.number().step(1).min(1)).description("Per-model context-window override for this region"),
+	reasoningEfforts: z.dict(z.union(SELECTION_EFFORTS)).description("Per-model default thinking level for this region (absent = let the upstream decide)"),
+	maxMode: z.boolean().description("Give every model its widest context window and strongest thinking level (absent = off)")
 });
 /**
 * Automation schema.

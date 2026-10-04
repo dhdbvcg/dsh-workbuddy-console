@@ -70,8 +70,10 @@ const TESTS = [
   ['volatile-schema-test.mjs', 'volatile 契约 / schemastery 能力 / settings 条目可写'],
   ['apply-idempotent-test.mjs', 'apply 幂等 / 重复注册路由 / 热重载'],
   ['model-availability-test.mjs', 'workbuddy 模型可用性 / 残留注册清理'],
+  ['model-effort-test.mjs', '思考强度 / Max 模式 的目录侧行为'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
+  ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / 思考强度下拉 / Max 模式开关'],
 ];
 
 // 先重新生成内联块：vendor 里的账号池客户端源码要同步进 lib/client.js。

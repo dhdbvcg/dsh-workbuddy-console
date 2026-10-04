@@ -8,6 +8,8 @@ dist/
 
 # 测试临时目录
 .wb-console-test/
+# 浏览器测试的 Chrome profile（正常写进 TEMP，这条只是兜底）
+.workbuddy-chrome-*/
 
 # 本地配置 / 凭证 —— 绝不要提交
 .env

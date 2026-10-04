@@ -3,6 +3,68 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.19] - 2026-10-04
+
+### 新增：模型上下文选择 / 思考强度切换 / Max 模式
+
+对标 WorkBuddy 客户端模型选择器里的三个控件，加到设置里的模型卡片
+（原来只有「勾选启用 + 图片输入 + 两档上下文单选」）。
+
+**1. 每模型思考强度（新增下拉）**
+
+参照客户端的「低/ 中 / 高 / 超高 / 极致」，这里按 DSH 自己的档位表给出
+`关闭 / 极简 / 低 / 中 / 高 / 超高 / 极致`，第一项「默认」表示不干预、
+交给上游决定。
+
+关键点：**只列该模型真实 advertise 的档位**。DSH 的 pi-ai 适配器在档位不受支持时
+会抛 `UNSUPPORTED_REASONING_EFFORT`，让用户选一个上游没有的档位等于每次请求都报错。
+
+实现落在 shim 而不是 adapter：pi-ai 只在请求**显式带 effort** 时才发
+`reasoning_effort`，没选时字段直接缺失。所以 `applyDefaultEffort()` 在请求
+离开 shim 时补上这个字段。三种情况刻意不写：请求已带档位（显式选择优先）、
+模型没有思考档位、保存的值不在该模型的档位表里（陈旧配置不该让请求失败）。
+
+**2. Max 模式（新增区域级开关）**
+
+对齐客户端同名开关：一个开关让所有模型都用满能力。
+`catalog.visible()` 在打开时忽略 `contextBudgets`（窗口回到原生上限），
+思考强度则取该模型 advertise 的最强档。
+
+**3. 上下文档位选择（原有，保留并确认没被改坏）**
+
+原本就有 200K / 原生上限两档单选，这次补了浏览器渲染断言防止回归。
+
+### 配置新增字段
+
+`modelSelectionCn` / `modelSelectionGlobal` 各多两个字段：
+
+| 字段 | 含义 |
+|---|---|
+| `reasoningEfforts` | `{ [modelId]: 档位 }`，每模型默认思考强度 |
+| `maxMode` | `boolean`，区域级 Max 模式 |
+
+两个字段都做了校验（`parseSelection`）：非法档位名、非布尔值一律拒绝整个写入，
+而不是存一个界面渲染不回来的值。
+
+### 过程中被测试抓到的两个真 bug
+
+- **`topEffortFor` 返回了最弱档而不是最强档**：按 `SELECTION_EFFORTS` 正序找第一个
+  命中项 —— 而这个数组是「由弱到强」的升序。加了反向遍历才符合 Max 模式的语义。
+- **测试挂载错了卡片**：用 `/workbuddy/` 宽松匹配，结果挂到了技能市场上，
+  模型区当然是空的。改成精确匹配 `workbuddy-xdpool`。
+  另外假status 少给 `ignored` / `creditReserves` 字段会让整页抛
+  `Cannot read properties of undefined (reading 'length')` —— 与本次改动无关，
+  但记下来免得下次再踩。
+
+### 测试
+
+- `test/model-effort-test.mjs`（新增 12 项）：目录侧的档位解析、Max 模式、
+  陈旧配置丢弃、设置热切换
+- `test/model-row-browser-test.mjs`（新增 9 项）：**真实 Chrome 里挂载模型卡片**，
+  断言三个控件真的渲染出来 —— 下拉选项只含该模型支持的档位、已保存值回显、
+  Max 模式打开后下拉被禁用且行内出现标记
+- 全量 **285 通过 0 失败**
+
 ## [2.0.18] - 2026-10-04
 
 ### 修复：无法使用 workbuddy 的模型（模型列表空 / 选不了）

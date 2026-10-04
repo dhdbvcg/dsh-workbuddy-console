@@ -76,7 +76,7 @@ const TESTS = [
   ['save-preserves-untouched-test.mjs', '保存模型改动不抹掉未触碰的字段'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
-  ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / 思考强度下拉 / Max 模式开关'],
+  ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / Max 模式开关 / 保存回写'],
 ];
 
 // 先重新生成内联块：vendor 里的账号池客户端源码要同步进 lib/client.js。

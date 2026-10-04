@@ -94,16 +94,50 @@ window.__boot_error = null;
     };
 
     var mod = null, declared = [], registered = {};
-    var settingsScope = {
-      getSnapshot: function () { return { formStatus: 'idle' }; },
+    // settingsScope 桩。
+    //
+    // 关键：writable: true 是这张卡片可写的**前提**（卡片用
+    // settingsScope?.getSnapshot().writable === true 判定 modelsEditable）。
+    // 之前这个桩没给 writable，导致 modelsEditable 恒为 false ——
+    // 「只翻 Max 模式点保存」自然写不进任何东西，那是**桩不对**，
+    // 不是被测代码的锅。桩必须对齐真实契约，否则测的是幻觉。
+    window.__SCOPE__ = {
+      getSnapshot: function () { return { writable: true, formStatus: 'idle' }; },
       set: function (k, v) { window.__SAVED__ = { key: k, value: v }; return Promise.resolve(); }
+    };
+    var settingsScope = window.__SCOPE__;
+    // t 桩：**唯一一份**，props 与 locale.bind 都用它。
+    //
+    // 之前分成两套（props 传一个、locale.bind 另一个），行为还不一致：
+    // props 那套只替换 key 里的占位符，而 key 里根本没有占位符 ——
+    // 于是 row.modelReasoning 渲染成裸 key，档位信息整个消失。
+    //
+    // 真实的 t 是「按 key 取文案 → 替换 {占位符}」。这里没有文案表，
+    // 就把 key 当模板；key 里没有占位符时把变量值追加到末尾，
+    // 这样「档位 / 个数」这类信息仍会出现在文本里，断言才看得见。
+    window.__T__ = function (key, vars) {
+      var out = String(key);
+      if (vars) {
+        var replaced = false;
+        for (var k in vars) {
+          var token = '{' + k + '}';
+          if (out.indexOf(token) >= 0) { out = out.split(token).join(String(vars[k])); replaced = true; }
+        }
+        if (!replaced) {
+          out += ' ' + Object.keys(vars).map(function (k) { return String(vars[k]); }).join(' ');
+        }
+      }
+      return out;
     };
     var configForms = {
       describe: function () { return { getSnapshot: function () { return { view: { namespaces: [{ ns: 'llm-workbuddy-xdpool' }] } }; } }; },
       get: function (id) { return settingsScope; }
     };
     var services = {
-      locale: { register: function () { return function () {}; }, bind: function () { return function (k) { return k; }; } },
+      locale: {
+        register: function () { return function () {}; },
+        bind: function () { return window.__T__; }
+      },
       configForms: configForms,
       slots: {
         inject: function (slot, fn) { fn(); },
@@ -150,7 +184,7 @@ window.__boot_error = null;
     var origErr = console.error;
     console.error = function () { window.__CONSOLE__.push(Array.from(arguments).map(String).join(' ')); origErr.apply(console, arguments); };
     try {
-      ReactDOM.render(React.createElement(Comp, {}), document.getElementById('r1'));
+      ReactDOM.render(React.createElement(Comp, { t: window.__T__, settingsScope: window.__SCOPE__ }), document.getElementById('r1'));
     } catch (e) {
       window.__RENDER_ERR__ = String(e && e.stack || e);
     }
@@ -160,6 +194,9 @@ window.__boot_error = null;
     var root = document.getElementById('r1');
     function snapshot() {
       var selects = Array.from(root.querySelectorAll('select'));
+      var saveBtn = Array.from(root.querySelectorAll('button')).filter(function (b) {
+        return /row\.modelsSave/.test(b.textContent || '');
+      })[0];
       return {
         text: root.textContent,
         maxSwitches: root.querySelectorAll('.dsm-workbuddy-xdpool-maxmode input').length,
@@ -168,9 +205,30 @@ window.__boot_error = null;
         effortValues: selects.map(function (s) { return s.value; }),
         effortOptions: selects.map(function (s) { return Array.from(s.options).map(function (o) { return o.value; }); }),
         budgetRadios: root.querySelectorAll('.dsm-workbuddy-xdpool-model-budget input[type=radio]').length,
+        saveBtnFound: !!saveBtn,
+        saveBtnDisabled: saveBtn ? saveBtn.disabled : null,
       };
     }
     window.__SNAP__ = snapshot;
+
+    /**
+     * 真实点一次「保存」，返回 settingsScope 实际收到的 payload。
+     *
+     * 这一步是必需的：Max 模式是区域级开关，单独翻它**不会创建模型草稿**。
+     * 如果 saveModels 入口还写着 draft 为空就 return，那么
+     * 「只开 Max 模式 → 点保存」会静默什么也不发生 —— 按钮是亮的（modelsDirty
+     * 算上了 maxMode），点了没反应，也不报错。这个坑只能靠真点一次才看得见。
+     */
+    window.__SAVE__ = function () {
+      window.__SAVED__ = undefined;
+      var btn = Array.from(root.querySelectorAll('button')).filter(function (b) {
+        return /row\.modelsSave/.test(b.textContent || '');
+      })[0];
+      if (!btn) return { clicked: false, reason: 'no save button' };
+      if (btn.disabled) return { clicked: false, reason: 'save button disabled' };
+      btn.click();
+      return { clicked: true };
+    };
 
     window.__RESULT__ = { ok: true, cardId: window.__CARD_ID__, snap: snapshot(), renderErr: window.__RENDER_ERR__, console: window.__CONSOLE__ };
   } catch (e) {
@@ -273,28 +331,24 @@ try {
     if (s.maxSwitches === 1) ok('渲染出 1 个 Max 模式开关');
     else bad(`Max 模式开关数量应为 1，实际 ${s.maxSwitches}`);
 
-    // 2) 思考强度下拉：只有两个模型有思考档位，所以应为 2 个
-    if (s.effortSelects === 2) ok('两个支持思考的模型各有一个思考强度下拉');
-    else bad(`思考强度下拉应为 2 个，实际 ${s.effortSelects}`);
+    // 2) 思考强度下拉必须**不存在** —— 档位选择已搬去 DSH 自带的推理等级列表。
+       // 插件卡片再放一套就是重复实现，且两套容易各说各话（用户明确要求删掉）。
+    if (s.effortSelects === 0) ok('卡片里没有思考强度下拉（已交给 DSH 自带的推理等级列表）');
+    else bad(`卡片里不该再有思考强度下拉，实际 ${s.effortSelects} 个`);
 
-    // 3) 选项内容：hy4-preview 有 low/medium/high/max，hy3 只有 low/high
-    const opts = s.effortOptions;
-    if (opts[0] && opts[0].includes('') && opts[0].includes('low') && opts[0].includes('max')) {
-      ok('第一个下拉含「默认」与模型支持的档位');
-    } else bad('第一个下拉的选项不对: ' + JSON.stringify(opts[0]));
-    if (opts[1] && opts[1].includes('low') && opts[1].includes('high') && !opts[1].includes('medium')) {
-      ok('第二个下拉只含该模型真实支持的档位（没有 medium）');
-    } else bad('第二个下拉的选项不对: ' + JSON.stringify(opts[1]));
-
-    // 4) 已保存的档位回显
-    if (s.effortValues[0] === 'high') ok('已保存的 high 档位正确回显');
-    else bad(`应回显 high，实际 ${s.effortValues[0]}`);
+    // 3) 模型行仍要如实列出该模型支持的档位（供对照，不是选择器）
+    //    t 桩回显 key，所以断言针对 key 文本；占位符已被替换成真实档位。
+    const text = String(s.text);
+    if (/row\.modelReasoning/.test(text)) ok('模型行仍列出各模型真实支持的思考档位');
+    else bad('模型行没有显示思考档位信息');
+    if (/\bhigh\b/.test(text)) ok('模型行显示了 high 档位（来自 supportedEfforts）');
+    else bad('模型行没有显示 high 档位');
 
     // 5) 上下文单选仍在
     if (s.budgetRadios > 0) ok(`上下文窗口单选仍在（${s.budgetRadios} 个）`);
     else bad('上下文窗口单选消失了');
 
-    // 6) 切到 Max 模式后：下拉禁用 + 行内出现标记
+    // 6) 切到 Max 模式后：行内出现标记（不再有下拉需要禁用）
     await evalJs(`
       (function () {
         window.__STATUS__ = Object.assign({}, window.__STATUS__, {
@@ -309,18 +363,90 @@ try {
       (function () {
         var el = document.getElementById('r1');
         ReactDOM.unmountComponentAtNode(el);
-        ReactDOM.render(React.createElement(window.__CARD__, {}), el);
+        ReactDOM.render(React.createElement(window.__CARD__, { t: window.__T__, settingsScope: window.__SCOPE__ }), el);
         return true;
       })()
     `);
     await new Promise((r) => setTimeout(r, 500));
     const snap2 = await evalJs('window.__SNAP__()');
-    if (snap2.effortDisabled.length === 2 && snap2.effortDisabled.every(Boolean)) {
-      ok('Max 模式打开后思考强度下拉被禁用（不会与开关打架）');
-    } else bad('Max 模式下应禁用思考强度下拉，实际 ' + JSON.stringify(snap2.effortDisabled));
-    if (snap2.text.indexOf('Max mode') >= 0 || snap2.text.indexOf('Max 模式') >= 0) {
+    if (snap2.effortSelects === 0) ok('Max 模式下依然没有思考强度下拉');
+    else bad(`Max 模式下不该出现下拉，实际 ${snap2.effortSelects}`);
+    if (/row\.modelMaxMode/.test(String(snap2.text))) {
       ok('Max 模式打开后模型行出现标记');
     } else bad('Max 模式打开后模型行没有标记');
+
+    // —— 7) 关键流程：只翻 Max 模式、一个模型都不改，直接点保存 ——
+    // 这条路径不创建模型草稿，saveModels 若还用 `draft === void 0` 早退，
+    // 就会「按钮亮着、点了没反应」。必须真点一次按钮看 payload 有没有到。
+    await evalJs(`
+      (function () {
+        window.__STATUS__ = Object.assign({}, window.__STATUS__, {
+          selection: Object.assign({}, window.__STATUS__.selection, { maxMode: false })
+        });
+        var el = document.getElementById('r1');
+        ReactDOM.unmountComponentAtNode(el);
+        ReactDOM.render(React.createElement(window.__CARD__, { t: window.__T__, settingsScope: window.__SCOPE__ }), el);
+        return true;
+      })()
+    `);
+    await new Promise((r) => setTimeout(r, 500));
+
+    // 翻转 Max 模式开关（用原生 setter 触发 React 的 onChange）
+    const flipped = await evalJs(`
+      (function () {
+        var cb = document.querySelector('.dsm-workbuddy-xdpool-maxmode input');
+        if (!cb) return { ok: false, reason: 'no maxmode checkbox' };
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked').set;
+        setter.call(cb, true);
+        cb.dispatchEvent(new window.Event('click', { bubbles: true }));
+        return { ok: true };
+      })()
+    `);
+    if (!flipped.ok) bad('找不到 Max 模式开关：' + flipped.reason);
+
+    await new Promise((r) => setTimeout(r, 250));
+    const snap3 = await evalJs('window.__SNAP__()');
+    if (snap3.saveBtnFound) ok('找到「保存」按钮');
+    else bad('找不到「保存」按钮');
+    if (snap3.saveBtnDisabled === false) {
+      ok('只翻 Max 模式后保存按钮变为可用');
+    } else {
+      bad(`只翻 Max 模式后保存按钮应可用，实际 disabled=${snap3.saveBtnDisabled}`);
+    }
+
+    const clickRes = await evalJs('window.__SAVE__()');
+    await new Promise((r) => setTimeout(r, 400));
+    const saved = await evalJs('window.__SAVED__ || null');
+    if (!clickRes.clicked) {
+      bad('点保存没反应：' + clickRes.reason);
+    } else if (!saved) {
+      // 保存失败时卡片会把原因写进 error 状态；把它读出来才知道卡在哪。
+      const errText = await evalJs(`
+        (function () {
+          var el = document.querySelector('.dsm-workbuddy-xdpool-error') ||
+                   Array.from(document.querySelectorAll('*')).filter(function (n) {
+                     return /失败|Could not save|error/i.test(n.className || '');
+                   })[0];
+          return el ? el.textContent : '(没有错误提示元素)';
+        })()
+      `);
+      bad('只翻 Max 模式点保存，settingsScope 没收到任何写入（静默失败）。页面提示: ' + String(errText).slice(0, 200));
+    } else {
+      ok('只翻 Max 模式点保存，确实写入了设置');
+      if (saved.key === 'modelSelectionCn') ok('写入的是 modelSelectionCn');
+      else bad(`写入的键不对: ${saved.key}`);
+      const v = saved.value || {};
+      if (v.maxMode === true) ok('保存的 payload 里 maxMode = true');
+      else bad(`payload 里 maxMode 应为 true，实际 ${JSON.stringify(v.maxMode)}`);
+      if (Array.isArray(v.enabledModelIds)) {
+        ok(`payload 里的启用列表没丢（${v.enabledModelIds.length} 个）`);
+      } else bad('payload 里没有 enabledModelIds');
+      if (v.reasoningEfforts && v.reasoningEfforts['hy4-preview'] === 'high') {
+        ok('未触碰的思考档位被原样带回（没被这次保存冲掉）');
+      } else {
+        bad('思考档位在这次保存中丢了：' + JSON.stringify(v.reasoningEfforts));
+      }
+    }
   }
 } catch (e) {
   bad('浏览器测试异常: ' + String(e && e.message ? e.message : e).slice(0, 200));

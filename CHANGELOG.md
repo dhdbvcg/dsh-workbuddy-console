@@ -3,6 +3,44 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.9] - 2026-10-04
+
+### 修复：账号池卡片「池状态不可用：HTTP 404」
+
+2.0.8 之后设置里两张卡片都出来了（`XD Pool` 和 `WorkBuddy 技能市场`），
+但账号池卡片报 `请求失败 / 池状态不可用：HTTP 404`。
+
+**根因**：`vendor/xdpool/lib/index.js` 自己声明的是
+
+```js
+const inject = ["llm", "settings"];
+```
+
+而本文件用 `export const inject = ['webServer']`，然后**手动同步调用**
+`xdpoolModule.apply(ctx, ...)` —— 这绕过了 cordis 的 inject 门控。
+于是 `settings` 还没就绪时，vendored 代码在内部抛错，被我们的
+`try/catch` 吞掉，结果**它那 9 条池路由一条都没注册**，
+浏览器端请求 `/plugins/dsh-workbuddy-xdpool/status` 自然 404。
+
+**修法**：把依赖列进本模块的 `inject`：
+
+```js
+export const inject = ['webServer', 'llm', 'settings'];
+```
+
+cordis 会等到它们全部可用再调用我们的 `apply`，转发给 vendored apply 就安全了。
+
+### 顺带把「查不到」变成「查得到」
+
+`/wb-console/api/diag` 现在多了两个字段，以后同类问题不用再靠猜：
+
+- `poolError` —— 转发给 vendored apply 失败时的错误与堆栈
+- `poolRoutes` —— 直接查 webserver 路由表，逐条报告池路由有没有注册上
+
+### 测试
+
+- 238 项，全绿；并同步了 `selftest` 里对 `inject` 的断言
+
 ## [2.0.8] - 2026-10-04
 
 ### 跟进：设置里看不到界面

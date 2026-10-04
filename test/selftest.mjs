@@ -25,7 +25,10 @@ console.log('\n插件形状');
 await t('导出 name / inject / apply', () => {
   assert.equal(typeof plugin.apply, 'function');
   assert.equal(plugin.name, 'workbuddy-console');
-  assert.deepEqual(plugin.inject, ['webServer']);
+  // llm / settings 是 vendored xdpool 需要的服务。
+  // 必须列在这里：我们是手动同步调用它的 apply()，绕过了 cordis 的
+  // inject 门控，少了这两个它会在内部抛错，9 条池路由一条都注册不上。
+  assert.deepEqual(plugin.inject, ['webServer', 'llm', 'settings']);
 });
 
 console.log('\n路由注册');

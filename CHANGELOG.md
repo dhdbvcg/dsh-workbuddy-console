@@ -3,6 +3,39 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.6] - 2026-10-04
+
+### 加固
+
+- **2.0.5 的幂等修复在「宿主重新 import 同一文件」时不够用。**
+
+  2.0.5 把「当前生效的注册」记在**模块级变量**里。但宿主热重载很可能是
+  重新 `import` 这个文件 —— 那是**另一个模块实例**，模块级变量会重新
+  初始化成 `null`，于是清不掉上一个实例留下的路由，
+  第二次注册仍然撞 `duplicate exact route "/wb-console"`。
+
+  现在改用 `Symbol.for('dsh-workbuddy-console.liveDispose')` 存在
+  `globalThis` 上，所有模块实例共享同一个 key。
+  这是有意为之的进程级单例：一个进程里本插件只应有一份注册。
+
+### 这次把守卫做到位了
+
+`test/apply-idempotent-test.mjs` 从 7 项加到 **10 项**，新增最关键的一条：
+用查询串让 Node 生成**第二个模块实例**，模拟宿主的重新 import，再 apply 一次。
+
+并实测这条守卫的有效性：
+
+| 实现 | 同一实例 apply×2 | 跨模块实例 apply |
+|---|---|---|
+| 模块级变量（2.0.5） | 通过 | **失败：duplicate exact route "/wb-console"** |
+| `Symbol.for` 进程级 key（本版） | 通过 | 通过 |
+
+也就是说：**如果没有这条跨实例用例，2.0.5 的修复看起来是好的，但实际场景仍会坏。**
+
+### 测试
+
+- 231 → **234 项**，全绿
+
 ## [2.0.5] - 2026-10-04
 
 ### 修复（严重）

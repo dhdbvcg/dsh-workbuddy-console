@@ -62,6 +62,15 @@ function makeCtx() {
 const mod = await import(pathToFileURL(path.join(PLUGIN, 'lib', 'index.js')).href);
 const ctx = makeCtx();
 
+// ---- 0. 清掉可能残留的进程级注册（测试自身要可重复运行）----
+{
+  const key = Symbol.for('dsh-workbuddy-console.liveDispose');
+  if (typeof globalThis[key] === 'function') {
+    try { globalThis[key](); } catch { /* 忽略 */ }
+    globalThis[key] = null;
+  }
+}
+
 // ---- 1. 第一次 apply ----
 let first = null;
 try {
@@ -85,6 +94,25 @@ try {
 const n2 = ctx.webServer.routes.exact.size;
 if (n2 === n1) ok(`两次 apply 后路由数不变（仍为 ${n2}）`);
 else bad(`路由泄漏: 第一次 ${n1} 条，两次后 ${n2} 条`);
+
+// ---- 2b. 最狠的一种：另一个模块实例（模拟宿主重新 import 同一文件）----
+// 模块级变量在这里会失效，所以实现用的是 Symbol.for 的进程级 key。
+// 用查询串让 Node 生成第二个模块实例。
+try {
+  const mod2 = await import(pathToFileURL(path.join(PLUGIN, 'lib', 'index.js')).href + '?reload=1');
+  const isSame = mod2 === mod;
+  if (!isSame) ok('成功加载第二个模块实例（模拟重新 import）');
+  else bad('没能生成第二个模块实例，该用例无效');
+
+  await mod2.apply(ctx, {});
+  ok('另一个模块实例 apply 未抛错（跨实例幂等生效）');
+
+  const n3 = ctx.webServer.routes.exact.size;
+  if (n3 === n1) ok(`跨实例 apply 后路由数仍为 ${n1}`);
+  else bad(`跨实例路由泄漏: ${n1} -> ${n3}`);
+} catch (e) {
+  bad('另一个模块实例 apply 抛错: ' + e.message);
+}
 
 // ---- 3. /wb-console 只应有一份 ----
 const hasBase = ctx.webServer.routes.exact.has('/wb-console');

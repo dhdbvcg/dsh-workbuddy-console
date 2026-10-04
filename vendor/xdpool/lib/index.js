@@ -3297,6 +3297,18 @@ function thinkingLevelMap(info) {
 		}
 		map[level] = efforts.includes(level) ? level : null;
 	}
+	/**
+	* `off` 刻意永远映射为 null，DSH 自带列表因此不出现「关闭」。
+	*
+	* 上游目录确实带 `canDisableThinking`（实测 glm-5.3-flash / kimi-k2.8-preview
+	* 为 true，见 ~/.dsh/.workbuddy-catalog.json），parseReasoning 也解析了它 ——
+	* 但**把它暴露出去也关不掉思考**：用户在 DSH 里选「关闭」时，DSH 的语义是
+	* 「不发 reasoning_effort 字段」，而这些 onlyReasoning 模型不发字段 =
+	* 上游按自己的 defaultEffort 思考照开。要真正关闭需要知道上游的
+	* 「关闭」线值令牌（"none"？还是独立开关字段？），目录数据里没有；
+	* 猜错会让这两个模型的请求被上游拒绝。在拿到真实契约之前，
+	* 不暴露一个做不到的选项比暴露一个会报错的选项诚实。
+	*/
 	map["off"] = null;
 	return map;
 }

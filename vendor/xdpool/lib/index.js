@@ -3620,12 +3620,14 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 			// `wrapped.constructor === PiAiAdapter` 变成false、`.constructor.name`
 			// 变成空串（宿主里任何 class 身份判断或错误信息都可能用到）。
 			if (property === "constructor") return Reflect.get(target, property, receiver);
-			const value = Reflect.get(target, property, receiver);
+		const value = Reflect.get(target, property, receiver);
 			if (typeof value !== "function") return value;
 			return function (...args) {
 				const stats = { found: false, options: { allowUserImages: true } };
 				const modelId = args.find((a) => a !== null && typeof a === "object" && typeof a.model === "string")?.model
-					?? args.find((a) => a !== null && typeof a === "object" && typeof a.modelId === "string")?.modelId;
+					?? args.find((a) => a !== null && typeof a === "object" && typeof a.modelId === "string")?.modelId
+					// prepareCall(provider, model, signal) 这类签名：第二个字符串参数就是模型 id
+					?? (typeof args[1] === "string" ? args[1] : void 0);
 				stats.options.allowUserImages = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
 				stats.options.onDrop = typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0;
 				stats.options.model = modelId; // 探针要记录是哪个模型触发的
@@ -3636,7 +3638,49 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 					logAdapterInvocation(property, patched, stats.found,
 						patched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0));
 				} catch {}
-				return Reflect.apply(value, target, patched);
+				/**
+				* **关键（这是第四轮才找到的真正入口）**：宿主流式请求的真实路径是
+				* `adapter.prepareCall(provider, model, signal)` → 拿到
+				* `{ model, stream: (options) => streamWithSnapshot(options, snapshot) }`
+				* → 调用 **返回对象里的 stream 闭包** 传消息。也就是说消息走的是
+				* prepareCall 返回值的函数属性，**完全不经过 adapter.stream** ——
+				* 只包方法层的话，净化会被整条链路绕过（调用级探针正是抓到了
+				* 「只有 prepareCall、没有 stream」才定位到这一层）。
+				* 所以凡是方法返回的对象/Promise，其函数属性也要包一层净化。
+				*/
+				const result = Reflect.apply(value, target, patched);
+				const wrapResultFns = (obj) => {
+					const out = { ...obj };
+					for (const key of Object.keys(out)) {
+						if (typeof out[key] !== "function") continue;
+						const fn = out[key];
+						out[key] = function (...innerArgs) {
+							const innerStats = { found: false, options: { ...stats.options } };
+							const innerPatched = innerArgs.map((arg) => sanitizeHistoryDeep(arg, 0, innerStats));
+							try {
+								logAdapterInvocation(property + ".<returned>." + key, innerPatched, innerStats.found,
+									innerPatched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0));
+							} catch {}
+							return Reflect.apply(fn, void 0, innerPatched);
+						};
+					}
+					return out;
+				};
+				/**
+				* 只包装「普通对象」与 Promise：
+				* - stream() 返回的是 AsyncGenerator —— 展开它会把内部状态弄丢，
+				*   迭代直接失效（第一批测试就是这么红掉的）；
+				* - 数组同理不能展开成普通对象；
+				* - prepareCall 返回 Promise<普通对象>，正是需要包的那一种。
+				*/
+				const isPlainObject = (v) => v !== null && typeof v === "object" && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
+				if (result !== null && typeof result === "object") {
+					if (typeof result.then === "function") {
+						return result.then((resolved) => (isPlainObject(resolved) ? wrapResultFns(resolved) : resolved));
+					}
+					if (isPlainObject(result)) return wrapResultFns(result);
+				}
+				return result;
 			};
 		}
 	});

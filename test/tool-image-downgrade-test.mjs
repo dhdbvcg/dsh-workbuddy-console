@@ -433,5 +433,40 @@ await t('探针文件：记录真实结构，无降级时不写', () => {
   }
 });
 
+await t('端到端（宿主真实路径）：prepareCall 返回的 stream 也会被净化', async () => {
+  // 回归：宿主不调 adapter.stream，而是 prepareCall() 拿 {model, stream} 后
+  // 调返回对象上的 stream —— 消息走内部闭包，只包方法层会被整条绕过。
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      received.push(body);
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const catalog = new WorkBuddyCatalog();
+    catalog.update([{ id: 'hy4-preview', name: 'Hy4', contextWindow: 200000, maxOutputTokens: 32000, supportsImages: true, multiplier: 0 }]);
+    const { adapter } = createWorkBuddyAdapter({ shim: { baseUrl: () => `http://127.0.0.1:${server.address().port}`, token: () => 't' }, catalog, ctx: { get: () => undefined }, providerId: 'workbuddy-xdpool' });
+    const messages = [
+      { role: 'user', content: [txt('看图')] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't1', content: [{ type: 'image', attachment: { attachmentId: 'a' } }] }] },
+      { role: 'user', content: [txt('继续')] },
+    ];
+    const prepared = await adapter.prepareCall('workbuddy-xdpool', 'hy4-preview', undefined);
+    let streamError;
+    try { for await (const _ of prepared.stream({ provider: 'workbuddy-xdpool', model: 'hy4-preview', messages })) {} }
+    catch (e) { streamError = e; }
+    assert.ok(streamError === undefined || !/cannot represent an image|UNSUPPORTED_CONTENT/.test(String(streamError?.message ?? '')), `仍失败：${streamError?.message}`);
+    assert.ok(received.length > 0, 'shim 没收到请求');
+    const sent = received.at(-1);
+    assert.ok(!/image_url|data:image/.test(sent), '请求体里有图片残留');
+    assert.match(sent, /图片输出已省略/, '应有降级说明');
+  } finally { server.close(); }
+});
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

@@ -3,6 +3,55 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.29] - 2026-10-05
+
+### 修复：净化被 `prepareCall` 整条绕过 —— 调用级探针定位到的真正入口
+
+v2.0.28 的调用级探针立功了。用户复现后读
+`~/.dsh/.workbuddy-xdpool/adapter-invocations.log`，铁证如下：
+
+```
+23:22:00 imageRequestPricing(string, string)
+23:22:00 resolveModel(string, string, object)
+23:22:00 prepareCall(string, string, object)   ← 用户发消息的时刻
+（之后没有任何 stream 调用）
+```
+
+宿主的流式请求**不经过 `adapter.stream`**，而是：
+
+```
+prepared = await adapter.prepareCall(provider, model, signal)
+// prepared = { model, stream: (options) => streamWithSnapshot(options, snapshot) }
+await prepared.stream({ provider, model, messages })   ← 消息走这里
+```
+
+`stream` 是 `prepareCall` **内部创建的闭包**，直接指向 `streamWithSnapshot`
+—— 我之前包的「方法层」被整条绕过，所以净化从未生效、探针（只在降级时写）
+从未落盘。前三轮修的（嵌套形状、调用形状、真实库）都对，但全被这一层绕过。
+
+### 修法
+
+代理的方法包装现在会检查**返回值**：
+- 返回 Promise<普通对象> → 等待后把对象上的**函数属性也包一层净化**
+  （`prepareCall` 正是这种）
+- 返回普通对象 → 同上
+- 返回其它（AsyncGenerator、数组等）→ **原样放行**：
+  展开生成器会弄丢内部状态导致迭代失效，数组展开成普通对象也会破坏形状
+
+### 验证
+
+- **宿主真实路径**（`prepareCall` → 返回的 `stream`）+ 真实嵌套形状 →
+  请求到达 shim、请求体无图片、含降级说明
+- 新增端到端测试锁住这条路径（此前所有端到端都走 `adapter.stream`，
+  而宿主根本不这么调 —— 这就是测试全绿但真机报错的原因）
+
+### 教训
+
+**给不属于自己的接口包代理前，必须先用探针确认真实调用路径。**
+我连续三轮都在给「想象中的入口」加固，而真实入口是返回值里的闭包 ——
+探针（记录每次调用与方法名）一轮就把它钉出来了。如果第一轮就有探针，
+这个 bug 早就修完了。
+
 ## [2.0.27] - 2026-10-04
 
 ### 新增：图片降级探针（把「实际发生了什么」变成可读文件）

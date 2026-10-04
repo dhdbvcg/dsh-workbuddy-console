@@ -28,11 +28,21 @@ const ROOT = path.resolve(HERE, '..');
  * 每个域名给多个 IP：实测单个 IP 会间歇性拒连，
  * 推送 5 次里 4 次报 "CONNECT tunnel failed, response 502"。
  * 换一个 IP 立刻就好，所以失败时轮换重试。
+ *
+ * 列表里的 IP 都逐个实测过（用 git-upload-pack 端点 + 证书校验）：
+ *   github.com   → 20.205.243.166 / 140.82.121.3 / 140.82.113.4   全部 HTTP 200
+ *   api.github.com → 20.205.243.168 / 140.82.121.6                HTTP 401（未鉴权，正常）
+ *   codeload     → 140.82.121.9 / 140.82.113.9                    HTTP 200
+ *
+ * 注意：20.205.243.165 看着像但实测返回 HTTP 400，**不要加回来**。
+ *       加错的 IP 会让 git 报 "The requested URL returned error: 400"。
+ * 重验方法：对 <ip>/<owner>/<repo>.git/info/refs?service=git-upload-pack
+ *           发请求，期望 200 + content-type: application/x-git-upload-pack-advertisement。
  */
 const REAL_IP = {
-  'github.com': ['20.205.243.166', '20.205.243.165', '140.82.121.3', '140.82.113.4'],
-  'api.github.com': ['20.205.243.168', '20.205.243.166', '140.82.121.6'],
-  'codeload.github.com': ['20.205.243.166', '140.82.121.9', '140.82.113.9'],
+  'github.com': ['20.205.243.166', '140.82.121.3', '140.82.113.4'],
+  'api.github.com': ['20.205.243.168', '140.82.121.6'],
+  'codeload.github.com': ['140.82.121.9', '140.82.113.9'],
   'objects.githubusercontent.com': ['185.199.108.133', '185.199.109.133', '185.199.110.133'],
   'raw.githubusercontent.com': ['185.199.108.133', '185.199.109.133', '185.199.110.133'],
 };
@@ -58,10 +68,10 @@ export function startTunnel() {
     let idx = ipCursor++ % list.length;
     let attempt = 0;
     let upstream = null;
-    let done = false;
+    let established = false;
 
     const tryNext = () => {
-      if (done) return;
+      if (established) return;
       if (attempt >= list.length) {
         clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
         return;
@@ -70,31 +80,50 @@ export function startTunnel() {
       idx++;
       attempt++;
 
-      upstream = net.connect(port, ip);
-      upstream.setTimeout(8000, () => upstream.destroy(new Error('connect timeout')));
+      const sock = net.connect(port, ip);
+      upstream = sock;
+      // 只用于「建连阶段」的超时；连上后必须清掉，
+      // 否则长时间传输会被当成空闲而断开
+      sock.setTimeout(8000, () => sock.destroy(new Error('connect timeout')));
 
-      upstream.once('connect', () => {
-        if (done) { upstream.destroy(); return; }
-        done = true;
-        upstream.setTimeout(0);
+      sock.once('connect', () => {
+        if (established) { sock.destroy(); return; }
+        established = true;
+        sock.setTimeout(0);
+
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        if (head && head.length) upstream.write(head);
-        upstream.pipe(clientSocket);
-        clientSocket.pipe(upstream);
+        if (head && head.length) sock.write(head);
+
+        // 用 pipe 的默认 end:true —— 源结束时对端会走 end()（TCP 半关闭，
+        // 会正常发出 FIN）。之前用 destroy() 强杀，GitHub 侧看到的是
+        // 连接被突然掐断，git 报 "schannel: server closed abruptly
+        // (missing close_notify)"，并且有时直接挂住不动。
+        sock.pipe(clientSocket);
+        clientSocket.pipe(sock);
       });
 
-      upstream.once('error', () => {
-        upstream.destroy();
-        if (!done) tryNext();
+      sock.once('error', (e) => {
+        if (!established) {
+          // 建连阶段失败 → 换下一个 IP
+          sock.destroy();
+          tryNext();
+          return;
+        }
+        // 已经通了才出错 → 必须结束客户端，否则 git 一直等
+        console.error('  [tunnel] ' + host + ' 传输中断: ' + (e.code || e.message));
+        clientSocket.destroy();
+      });
+
+      // 上游正常关闭 → 让客户端也结束（不 destroy，交给 pipe 收尾）
+      sock.once('close', () => {
+        if (established && !clientSocket.destroyed) clientSocket.end();
       });
     };
 
     tryNext();
 
-    clientSocket.on('error', () => { done = true; if (upstream) upstream.destroy(); });
-    const closeBoth = () => { done = true; if (upstream) upstream.destroy(); clientSocket.destroy(); };
-    upstream && upstream.on('close', () => { if (done) clientSocket.destroy(); });
-    clientSocket.on('close', closeBoth);
+    clientSocket.on('error', () => { if (upstream) upstream.destroy(); });
+    clientSocket.on('close', () => { if (upstream && !upstream.destroyed) upstream.destroy(); });
   });
   return new Promise((resolve) => {
     proxy.listen(0, '127.0.0.1', () => resolve({ proxy, url: 'http://127.0.0.1:' + proxy.address().port }));

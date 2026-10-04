@@ -1095,7 +1095,13 @@ const setModelBudget = (id, budget) => {
 						imageModelIds,
 						contextBudgets,
 						reasoningEfforts,
-						maxMode: maxModeDraft
+						// 用合并后的 maxMode，不是 maxModeDraft。
+						// draft 的语义是「undefined = 本次没碰过这个开关」，而宿主那边
+						// 收到 undefined 会**跳过该字段不写** —— 由于整段 selection 是整体
+						// 覆盖的，结果是已存的 maxMode 被悄悄抹掉：用户只是勾了个模型，
+						// Max 模式却自己关掉了。其它字段不受影响是因为它们在卡片里是
+						// 「从 status 整体重建」，而不是「草稿叠加已存值」。
+						maxMode
 					});
 					setDraft(void 0);
 					// Same after a successful save: the saved state is now the truth.

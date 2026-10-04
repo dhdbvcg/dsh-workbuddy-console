@@ -46,10 +46,17 @@
 两个字段都做了校验（`parseSelection`）：非法档位名、非布尔值一律拒绝整个写入，
 而不是存一个界面渲染不回来的值。
 
-### 过程中被测试抓到的三个真 bug
+### 过程中被测试抓到的四个真 bug
 
-- **新字段根本没进设置文件（最隐蔽的一个）**：`saveSelection` 是**手工逐字段构造
-  payload** 的，只有 `enabledModelIds` / `imageModelIds` / `contextBudgets` 三行。
+- **改A 会不会把B 悄悄重置（隐蔽度最高）**：卡片保存时写的是 `maxMode: maxModeDraft`，
+  而 `maxModeDraft` 的语义是「undefined = 本次没碰过这个开关，请沿用已存值」。
+  但整段 selection 是**整体覆盖**的，宿主收到 undefined 会跳过该字段不写 ——
+  于是用户只是勾了个模型点保存，**已存的Max 模式就被抹掉、自己关掉了**。
+  其它字段不受影响是因为它们在卡片里是「从 status 整体重建」，
+  只有 maxMode 走了「草稿叠加已存值」这条路。改成写合并后的 `maxMode`。
+  补了 `save-preserves-untouched-test.mjs` 静态断言每个字段的值来源。
+- **新字段根本没进设置文件**：`saveSelection` 是**手工逐字段构造payload**的，
+  只有 `enabledModelIds` / `imageModelIds` / `contextBudgets` 三行。
   新加的 `reasoningEfforts` 与 `maxMode` 没人补那一行 → 被**静默丢弃**。
   表现是：界面能改、保存按钮会亮、不报任何错，但设置文档里根本没有那个值，
   重开卡片又变回原样。这类 bug 功能测试很难稳定抓到（要真跑一遍设置服务），
@@ -59,7 +66,7 @@
   命中项 —— 而这个数组是「由弱到强」的升序。加了反向遍历才符合 Max 模式的语义。
 - **测试挂载错了卡片**：用 `/workbuddy/` 宽松匹配，结果挂到了技能市场上，
   模型区当然是空的。改成精确匹配 `workbuddy-xdpool`。
-  另外假status 少给 `ignored` / `creditReserves` 字段会让整页抛
+  另外假 status 少给 `ignored` / `creditReserves` 字段会让整页抛
   `Cannot read properties of undefined (reading 'length')` —— 与本次改动无关，
   但记下来免得下次再踩。
 
@@ -71,10 +78,19 @@
   schema 接受 → host 读取 → catalog 解析 → 写进请求体 → 显式档位不被覆盖
 - `test/selection-fields-test.mjs`（新增 7 项）：schema / parseSelection /
   saveSelection / 卡片保存 / 卡片回显 五处字段集必须一致
+- `test/save-preserves-untouched-test.mjs`（新增 9 项）：保存时不得抹掉用户
+  没碰过的字段（断言每个字段的值来源是「整体重建」或「草稿 ?? 已存值」）
 - `test/model-row-browser-test.mjs`（新增 9 项）：**真实 Chrome 里挂载模型卡片**，
   断言三个控件真的渲染出来 —— 下拉选项只含该模型支持的档位、已保存值回显、
   Max 模式打开后下拉被禁用且行内出现标记
-- 全量 **312 通过 0 失败**
+- 全量 **311 通过 0 失败**
+
+### 顺带修的测试基础设施
+
+`test/run-all.mjs` 的 `spawnSync` 原本**没有 timeout** —— 一个不退出的子测试
+（浏览器测试里 Chrome 起不来、CDP 轮询空转）会把整个套件永久挂住。
+实测挂过一次：25 分钟零输出，只能强杀。现已加 `timeout: 180_000` +
+`killSignal: 'SIGKILL'`。
 
 ## [2.0.18] - 2026-10-04
 

@@ -3,6 +3,89 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.15] - 2026-10-04
+
+### 修复：模型勾选保存不了（真正的根因）
+
+2.0.12 的探针在正确时机采到了决定性数据：
+
+```
+viewReady: true
+namespaces: ["session-log-deepseek","agent-default-model","llm-pi-ai","permission",
+             "ui-theme","locale","ui-settings", ...]     ← 21 个条目
+exactMatch: false        ← 但【没有 llm-workbuddy-xdpool】
+formStatus: "unavailable"
+```
+
+**我们的条目根本没被登记进 settings 文档。**
+
+在 `dsh-settings` 里找到了那道关卡：
+
+```js
+function volatileForm(schema) {
+  if (schema.meta.volatile) return plainSchema(schema);   // 只认 volatile 字段
+  if (schema.type === "object") { ...递归... }
+  // 都不是 → undefined → 这个条目被丢掉
+}
+```
+
+而 vendored 的 `Config` 用 `asVolatile()` 包装字段：
+
+```js
+function asVolatile(schema) {
+  return typeof schema.volatile === "function" ? schema.volatile() : schema;
+}
+```
+
+**只要插件解析到的 schemastery 没有 `.volatile()`，`asVolatile` 就退化成空操作**
+→ 没有任何 volatile 字段 → 条目进不了 settings 文档 →
+账号池卡片拿不到可写作用域 → 「取消勾选 → 保存 → 又变回勾选」，**且不报任何错**。
+
+### 为什么解析到了没有 `.volatile()` 的那份
+
+`link-vendor.mjs` 原先建的是**一个整目录 junction**，只能整体选一个源：
+
+| 位置 | schemastery | `.volatile()` |
+|---|---|---|
+| desktop profile（插件所在） | 3.18.4（与宿主一致） | ✅ 有 |
+| 共享区 `profiles/node_modules` | 3.18.2（另一个全局 dsh 带进来的） | ❌ 没有 |
+
+desktop **缺** `dsh-llm`/`dsh-settings`，共享区四个都全 ——
+`covers()` 于是选了共享区，把 schemastery 一起带错了。
+
+### 修法：按包逐个选源
+
+`link-vendor.mjs` 重写为：
+
+1. 每个包单独选源，**插件所在 profile 最优先**（与宿主版本一致）
+2. 缺的包再去共享区补
+3. **schemastery 额外要求「真的支持 `.volatile()`」**，否则换下一个源
+4. 依赖清单改为**从代码提取**（手写清单曾漏掉 `@deepseek-ai/dsh-llm-pi-ai`，
+   按包链接后那个包解析不到，vendored 模块直接 import 失败）
+5. 能力检查走**子进程 + 动态 import**：那份 schemastery 可能是 ESM，
+   用 `require()` 会抛 `ERR_REQUIRE_ESM` 而被误判成「不支持」
+
+修复后实测：
+
+```
+链接处 schemastery .volatile : yes
+Config 字段 meta.volatile    : 12/12 全部 true     （修复前：全部 falsy）
+模拟宿主 volatileForm(Config): 生成 12 字段表单      （修复前：undefined）
+```
+
+### 守卫
+
+- `test/volatile-schema-test.mjs`（8 项）：直接问「Config 的字段是不是 volatile」，
+  并模拟宿主的 `volatileForm()` 判定
+- `test/link-vendor-test.mjs` 重写：不再断言「移走链接就解析不到」
+  （在 profile 下跑测试时父级本来就能提供，那条断言会误报），
+  改为断言**解析到的那份 schemastery 必须支持 `.volatile()`**
+- `scripts/prove-volatile-guard.mjs`：把链接换成错误的那份，实测两个守卫都会失败
+
+### 测试
+
+- 239 → **248 项**，全绿
+
 ## [2.0.14] - 2026-10-04
 
 ### 诊断补全：采 `status`，并纠正一处误读

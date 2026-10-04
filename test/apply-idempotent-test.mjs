@@ -33,9 +33,15 @@ function makeCtx() {
     apply: () => undefined,
   });
 
+  // 与真实实现同构：exact / prefixes 是 webserver 实例上的**直接字段**
+  // （dsh-host-webserver 里就是 `exact = new Map()` 这样的类字段）。
+  // 之前我把它们藏在 routes 里，导致 clearOwnRoutes 在 mock 中成了空操作，
+  // 测试给的是假信心。
   const ctx = {
     webServer: {
       port: 8787,
+      exact,
+      prefixes,
       register(route) {
         const table = route.kind === 'exact' ? exact : prefixes;
         if (table.has(route.path)) {
@@ -114,6 +120,46 @@ try {
   bad('另一个模块实例 apply 抛错: ' + e.message);
 }
 
+// ---- 2c. 最贴近用户实际卡住状态的一种：旧版本留下的残留路由 ----
+//
+// 关键：必须用**全新的 ctx**。旧版本（≤2.0.5）注册路由时没有登记 disposer，
+// 进程里那个全局 key 是 null，所以 disposeLive() 什么也清不掉 ——
+// 只能靠 clearOwnRoutes() 直接删路由表。
+//
+// 用同一个 ctx 测是假的：前面那次 apply 的 disposer 会顺手把这些路径删掉，
+// 于是测试通过但 clearOwnRoutes 根本没被验证（上一版就踩了这个坑）。
+{
+  const fresh = makeCtx();
+  const { exact, prefixes } = fresh.webServer;
+
+  // 旧代码留下的：本插件命名空间下的几条，没有任何 disposer
+  exact.set('/wb-console', { kind: 'exact', path: '/wb-console', handler: () => {} });
+  exact.set('/wb-console/api/diag', { kind: 'exact', path: '/wb-console/api/diag', handler: () => {} });
+  prefixes.set('/wb-console/legacy', { kind: 'prefix', path: '/wb-console/legacy', handler: () => {} });
+  // 别的插件的路由，绝不能被误删
+  exact.set('/other-plugin/page', { kind: 'exact', path: '/other-plugin/page', handler: () => {} });
+
+  // 确认此刻确实"卡住"：没有可用的 disposer
+  const key = Symbol.for('dsh-workbuddy-console.liveDispose');
+  if (typeof globalThis[key] === 'function') globalThis[key] = null;
+
+  try {
+    await mod.apply(fresh, {});
+    ok('全新 ctx 上有无 disposer 的残留时 apply 仍成功（兜底清理生效）');
+  } catch (e) {
+    bad('残留导致 apply 抛错: ' + e.message);
+  }
+
+  if (exact.has('/other-plugin/page')) ok('别的插件的路由未被误删');
+  else bad('误删了别的插件的路由！');
+
+  if (!prefixes.has('/wb-console/legacy')) ok('残留的 legacy 前缀路由已被清掉');
+  else bad('legacy 前缀路由没被清掉');
+
+  if (exact.has('/wb-console/api/diag')) ok('api/diag 已被重新注册（说明清理后成功注册）');
+  else bad('api/diag 丢失');
+}
+
 // ---- 3. /wb-console 只应有一份 ----
 const hasBase = ctx.webServer.routes.exact.has('/wb-console');
 if (hasBase) ok('/wb-console 仍在路由表里');
@@ -124,9 +170,9 @@ try {
   const d = await mod.apply(ctx, {});
   if (typeof d === 'function') {
     d();
-    const n3 = ctx.webServer.routes.exact.size;
-    if (n3 === 0) ok('dispose 清空所有路由');
-    else bad(`dispose 后仍剩 ${n3} 条路由`);
+    const left = ctx.webServer.routes.exact.size;
+    if (left === 0) ok('dispose 清掉了本插件的全部路由');
+    else bad(`dispose 后 exact 剩 ${left} 条: ` + [...ctx.webServer.routes.exact.keys()].join(', '));
     await mod.apply(ctx, {});
     ok('dispose 后可重新 apply');
   } else {

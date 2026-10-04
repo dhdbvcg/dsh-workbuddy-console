@@ -3,6 +3,50 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.7] - 2026-10-04
+
+### 修复（严重）：能自愈已经被卡住的进程
+
+- 2.0.6 的幂等修复对**将来**的重复注册有效，但对**已经卡住**的进程没用：
+  旧版本（≤2.0.5）注册路由时**没有登记 disposer**，那些残留拿不到任何
+  清理入口，`disposeLive()` 也无能为力 —— 于是插件一直「异常」，
+  只能靠重启 DSH 才能恢复。
+
+  现在 `apply()` 里多一道兜底：**直接扫 webserver 的路由表**，
+  删掉 `BASE`（`/wb-console`）命名空间下的残留。
+
+  `dsh-host-webserver` 的路由表就是它的公开字段：
+
+  ```js
+  exact = new Map();     // exact 路由
+  prefixes = new Map();  // 前缀路由
+  ```
+
+  只删自己前缀下的键，其它插件（旧 xdpool 用的是 `/pool/...`）不受影响。
+  这样即使进程里已经卡着残留，插件重新加载时也能自己恢复，不必等重启。
+
+### 测试终于测到了实现本身
+
+排查这个用例时发现**上一版的测试是假通过**：mock 把路由表放在
+`webServer.routes` 里，而真实实现是 `webServer.exact` / `webServer.prefixes`
+**直接字段**，于是 `clearOwnRoutes()` 在测试里成了空操作。
+
+两处修正：
+- mock 改成与真实实现同构（`exact` / `prefixes` 直接挂在 webserver 上）
+- 该用例改用**全新的 ctx**：旧代码从没登记 disposer，全局 key 是 `null`；
+  用同一个 ctx 会撞上前一次的 disposer，测不到兜底清理
+
+并实测有效性：
+
+| 实现 | 结果 |
+|---|---|
+| 禁用 `clearOwnRoutes` | **3 项失败**，其中一项正是 `webserver: duplicate exact route "/wb-console"` |
+| 启用 | 14 项全过 |
+
+### 测试
+
+- 234 → **238 项**，全绿
+
 ## [2.0.6] - 2026-10-04
 
 ### 加固

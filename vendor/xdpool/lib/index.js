@@ -3585,12 +3585,23 @@ function sanitizeHistoryDeep(value, depth, stats) {
 /**
  * 调用级探针：记录 adapter 的每次方法调用（含是否找到 messages、图片数）。
  * 图片降级已经连错三轮，每轮都靠读源码反推宿主行为 —— 这个文件把
- * 「宿主到底怎么调我们」变成可读证据。只记前 60 条，之后静默，避免增长。
+ * 「宿主到底怎么调我们」变成可读证据。
+ *
+ * 配额分开计：**带 messages 的调用上限 60**（真正要观测的对象），
+ * 其它（resolveModel / listModels 等 UI 噪声）上限 20。否则启动时几十条
+ * 模型列表查询会把配额耗光，等用户真正发消息时反而不记了 —— 那样探针
+ * 恰好在最关键的时刻失效。
  */
-let invocationProbeLines = 0;
+let messageProbeLines = 0;
+let noiseProbeLines = 0;
 function logAdapterInvocation(property, args, found, imgCount) {
-	if (invocationProbeLines >= 60) return;
-	invocationProbeLines += 1;
+	if (found) {
+		if (messageProbeLines >= 60) return;
+		messageProbeLines += 1;
+	} else {
+		if (noiseProbeLines >= 20) return;
+		noiseProbeLines += 1;
+	}
 	try {
 		const dir = pluginDataDir();
 		mkdirSync(dir, { recursive: true });

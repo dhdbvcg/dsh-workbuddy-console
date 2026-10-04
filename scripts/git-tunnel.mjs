@@ -22,13 +22,23 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
 /** DNS 被污染，写死真实 IP */
+/**
+ * 域名 → 真实 IP 列表（DNS 被污染，所以写死）。
+ *
+ * 每个域名给多个 IP：实测单个 IP 会间歇性拒连，
+ * 推送 5 次里 4 次报 "CONNECT tunnel failed, response 502"。
+ * 换一个 IP 立刻就好，所以失败时轮换重试。
+ */
 const REAL_IP = {
-  'github.com': '20.205.243.166',
-  'api.github.com': '20.205.243.168',
-  'codeload.github.com': '20.205.243.166',
-  'objects.githubusercontent.com': '185.199.108.133',
-  'raw.githubusercontent.com': '185.199.108.133',
+  'github.com': ['20.205.243.166', '20.205.243.165', '140.82.121.3', '140.82.113.4'],
+  'api.github.com': ['20.205.243.168', '20.205.243.166', '140.82.121.6'],
+  'codeload.github.com': ['20.205.243.166', '140.82.121.9', '140.82.113.9'],
+  'objects.githubusercontent.com': ['185.199.108.133', '185.199.109.133', '185.199.110.133'],
+  'raw.githubusercontent.com': ['185.199.108.133', '185.199.109.133', '185.199.110.133'],
 };
+
+/** 轮换游标：每次连接从"下一个"IP 开始，避免总撞同一个坏的 */
+let ipCursor = 0;
 
 export function startTunnel() {
   const proxy = http.createServer((req, res) => {
@@ -38,21 +48,53 @@ export function startTunnel() {
   proxy.on('connect', (req, clientSocket, head) => {
     const [host, portStr] = req.url.split(':');
     const port = Number(portStr) || 443;
-    const ip = REAL_IP[host];
-    if (!ip) {
+    const list = REAL_IP[host];
+    if (!list || list.length === 0) {
       clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
       return;
     }
-    const upstream = net.connect(port, ip, () => {
-      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (head && head.length) upstream.write(head);
-      upstream.pipe(clientSocket);
-      clientSocket.pipe(upstream);
-    });
-    upstream.on('error', () => clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
-    clientSocket.on('error', () => upstream.destroy());
-    upstream.on('close', () => clientSocket.destroy());
-    clientSocket.on('close', () => upstream.destroy());
+
+    // 依次尝试该域名的各个 IP；全部失败才放弃
+    let idx = ipCursor++ % list.length;
+    let attempt = 0;
+    let upstream = null;
+    let done = false;
+
+    const tryNext = () => {
+      if (done) return;
+      if (attempt >= list.length) {
+        clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        return;
+      }
+      const ip = list[idx % list.length];
+      idx++;
+      attempt++;
+
+      upstream = net.connect(port, ip);
+      upstream.setTimeout(8000, () => upstream.destroy(new Error('connect timeout')));
+
+      upstream.once('connect', () => {
+        if (done) { upstream.destroy(); return; }
+        done = true;
+        upstream.setTimeout(0);
+        clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        if (head && head.length) upstream.write(head);
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+      });
+
+      upstream.once('error', () => {
+        upstream.destroy();
+        if (!done) tryNext();
+      });
+    };
+
+    tryNext();
+
+    clientSocket.on('error', () => { done = true; if (upstream) upstream.destroy(); });
+    const closeBoth = () => { done = true; if (upstream) upstream.destroy(); clientSocket.destroy(); };
+    upstream && upstream.on('close', () => { if (done) clientSocket.destroy(); });
+    clientSocket.on('close', closeBoth);
   });
   return new Promise((resolve) => {
     proxy.listen(0, '127.0.0.1', () => resolve({ proxy, url: 'http://127.0.0.1:' + proxy.address().port }));

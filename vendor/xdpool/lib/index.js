@@ -3285,7 +3285,18 @@ function thinkingLevelMap(info) {
 		"max"
 	];
 	const map = {};
-	for (const level of levels) map[level] = efforts.includes(level) ? level : null;
+	for (const level of levels) {
+		// DSH 的「超高」叫 xhigh，上游线格式叫 shigh —— 同一个档位（都排在
+		// high 和 max 之间），只是两套命名。精确匹配会让 advertise shigh 的
+		// 模型在 DSH 自带列表里**丢掉超高这一档**（只剩 低/中/高/极致，
+		// 而 WorkBuddy 客户端同一模型有 5 档）。所以上游只报 shigh 时，
+		// 把 xhigh 映射过去；上游真报 xhigh 时仍用原值。
+		if (level === "xhigh" && !efforts.includes("xhigh") && efforts.includes("shigh")) {
+			map[level] = "shigh";
+			continue;
+		}
+		map[level] = efforts.includes(level) ? level : null;
+	}
 	map["off"] = null;
 	return map;
 }

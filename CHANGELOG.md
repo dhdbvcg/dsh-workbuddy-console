@@ -3,6 +3,28 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.22] - 2026-10-04
+
+### 修复：advertise `shigh` 的模型在 DSH 自带列表里丢「超高」档
+
+用户要求把模型支持的思考强度做到 DSH 自带的推理等级列表里 —— 但对不上：
+DSH 的「超高」叫 `xhigh`，上游线格式叫 `shigh`（同一个档位，都排在
+high 和 max 之间，只是两套命名）。`thinkingLevelMap` 原来做精确字符串匹配，
+于是 advertise `low / medium / high / shigh / max` 的模型在 DSH 里只剩
+低 / 中 / 高 / 极致 4 档，而 WorkBuddy 客户端同一模型有完整的 5 档。
+
+修法：上游只报 `shigh`（没有 `xhigh`）时，把 DSH 的 `xhigh` 映射到线值
+`shigh`；上游真报 `xhigh` 时仍用原值；两者都没有时不凭空造档。
+
+选「超高」时线上现在会发 `reasoning_effort: "shigh"`，上游按其 advertise
+接受。Max 模式兜底不受影响（仍取最强档 `max`）。
+
+### 测试
+
+- `test/shigh-alias-test.mjs`（新增 7 项）：走**真实** `adapter.buildModels()`
+  路径断言 DSH 可见档位阶梯与客户端一致（5 档）、真 xhigh 不被改写、
+  无此档不造档、旧路径不回归、Max 模式兜底不受影响
+
 ## [2.0.21] - 2026-10-04
 
 ### 修复：模型卡片点保存要等好几秒才生效

@@ -81,7 +81,7 @@ await t('转发给 vendored 的是条目配置本身（不是空的 config.pool�
 
 console.log('\n路由注册');
 
-function harness(port) {
+function harness(port, extra = {}) {
   const routes = new Map();
   const ctx = {
     webServer: {
@@ -94,7 +94,7 @@ function harness(port) {
     },
     logger: { info() {}, warn() {}, error() {} },
   };
-  const dispose = plugin.apply(ctx, { port });
+  const dispose = plugin.apply(ctx, { port, creditMeter: false, ...extra });
   return { routes, dispose, ctx };
 }
 
@@ -177,6 +177,44 @@ await t('app.js 里的接口调用带 /wb-console/api 前缀', async () => {
   const res = fakeRes();
   await routes.get('/wb-console/app.js').handler({ method: 'GET' }, res);
   assert.match(res.out.body, /\/wb-console\/api/);
+});
+
+await t('池状态短缓存：连续读只打一次池，写操作后立刻失效', async () => {
+  // 「点按钮要等好几秒」的主要来源：池的 /status 每个账号要发两次
+  // 网络请求（credits + checkin），3 个账号实测 1.3s；而控制台每次刷新
+  // 都要拉它。这里用假池数请求次数，验证缓存真的在起作用，
+  // 并且**写操作之后必须失效**（否则会看到旧数据）。
+  let poolHits = 0;
+  const { server, port } = await fakePool((url, method) => {
+    poolHits++;
+    if (String(url).startsWith('/plugins/dsh-workbuddy-xdpool/status')) {
+      return { status: 200, body: { ok: true, accounts: [{ id: 'a' }], models: [] } };
+    }
+    return { status: 200, body: { ok: true } };
+  });
+  try {
+    const { routes } = harness(port, { creditMeter: false });
+    const mode = routes.get('/wb-console/api/mode');
+    assert.ok(mode, '没有 /api/mode 路由');
+
+    await mode.handler({ method: 'GET' }, fakeRes());
+    const afterFirst = poolHits;
+    assert.equal(afterFirst, 1, `第一次应当打一次池，实际 ${afterFirst}`);
+
+    await mode.handler({ method: 'GET' }, fakeRes());
+    assert.equal(poolHits, 1, `第二次应当命中缓存（池请求数仍为 1），实际 ${poolHits}`);
+
+    // 写操作之后缓存必须失效
+    const rescan = routes.get('/wb-console/api/accounts/rescan');
+    assert.ok(rescan, '没有 /api/accounts/rescan 路由');
+    await rescan.handler(postReq({}), fakeRes());
+    const afterWrite = poolHits;
+
+    await mode.handler({ method: 'GET' }, fakeRes());
+    assert.equal(poolHits, afterWrite + 1, '写操作后读缓存应失效，必须重新打池');
+  } finally {
+    server.close();
+  }
 });
 
 console.log('\n代理到 xdpool（用假 HTTP 服务模拟插件）');

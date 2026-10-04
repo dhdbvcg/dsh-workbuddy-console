@@ -3,6 +3,67 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.17] - 2026-10-04
+
+### 修复：点按钮要等好几秒
+
+先把每个接口量了一遍（`scripts/time-endpoints.mjs`）：
+
+| 接口 | 冷 | 热 |
+|---|---|---|
+| `/wb-console/api/tasks` | **4606 ms** | **2405 ms** |
+| 池 `/status`（卡片主数据） | 1623 ms | 1287 ms |
+| `/wb-console/api/overview` | 1258 ms | 1302 ms |
+| `/wb-console/api/mode` | 1236 ms | 1338 ms |
+| `/api/credit`、`/api/history`、页面 HTML | 7~20 ms | 7~20 ms |
+
+**慢的全是要经过池的。** 在 vendored 的 `poolWebStatus()` 里找到了原因：
+
+```js
+for (const account of accounts) {
+  if (!row.cooling) {
+    const credits = await deps.client.fetchCredits(...);        // ← 每账号一次网络请求
+    const checkin = await deps.client.fetchCheckinStatus(...);  // ← 每账号再一次
+  }
+}
+```
+
+**每次 status 都要对每个账号做两次网络往返**（3 个账号 = 6 次串行）。
+而控制台刷新时 `load()` 串行拉 `mode` + `overview`，再加上 `tasks`
+逐个账号去上游拉任务 —— 加起来 4~6 秒，就是「点按钮要等好几秒」。
+
+（`tasks` 那边已经用了并发池，所以瓶颈是真实的网络 I/O，只能靠缓存。）
+
+### 修法：两层缓存 + stale-while-revalidate
+
+都在本插件自己的层里，**不动 vendored 代码**：
+
+1. **池状态短缓存**（`callPool` 出口，默认 TTL 5s）
+   - 只缓存 GET；**任何写操作立刻清空缓存**，所以不会「操作完看到旧数据」
+   - 超过 TTL 但在 stale 窗口（30s）内：**先返回旧数据，后台再刷新**
+     （stale-while-revalidate）→ 点按钮不再等网络，数据几百毫秒后自我更新
+2. **任务列表缓存**（默认 TTL 30s）
+   - 成长任务进度变化很慢，30s 完全够用
+   - 领奖（`/api/tasks/claim`）与一键签到会立刻清掉它
+
+可调：`WB_POOL_CACHE_MS` / `WB_TASKS_CACHE_MS`（设 0 即关闭）。
+`/wb-console/api/diag` 里新增 `poolCache` / `tasksCache`，能直接看到
+命中数、stale 命中数、后台刷新次数与是谁清掉的。
+
+### 守卫
+
+`selftest` 增加一项，用假池**数请求次数**：
+
+- 第一次读 → 打池 1 次
+- 紧接着再读 → 请求数不变（命中缓存）
+- 发一个写请求后再读 → 必须重新打池（缓存已失效）
+
+并实测有效：把 TTL 改成 0（等于关掉缓存）后该测试立刻失败。
+
+### 测试
+
+- 249 → **250 项**，全绿
+
 ## [2.0.16] - 2026-10-04
 
 ### 修复：转发给 vendored 的配置是空的（保存问题的最后一环）

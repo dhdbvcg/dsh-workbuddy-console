@@ -17,8 +17,11 @@
  *   3. **端到端**：真 PiAiAdapter + 真 provider + 本地 HTTP 服务器当 shim，
  *      断言请求真的发出、且请求体里工具消息不再含图片
  */
+import fs from 'node:fs';
+import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -189,12 +192,25 @@ await t('降级会报告丢弃计数（静默降级必须可诊断）', () => {
     ],
   });
   assert.strictEqual(dropped.length, 1, '应恰好上报一次');
-  assert.deepStrictEqual(dropped[0], { modelId: 'no-image', images: 3, userImages: 1, historyImages: 2 });
+  assert.deepStrictEqual(
+    { images: dropped[0].images, userImages: dropped[0].userImages, historyImages: dropped[0].historyImages },
+    { images: 3, userImages: 1, historyImages: 2 },
+  );
+  // sites 记录「哪条消息、什么 role、图片在第几层」—— 探针与日志都靠它定位
+  assert.deepStrictEqual(
+    dropped[0].sites.map((s) => `${s.role}x${s.count}@${s.depth.join('/')}`),
+    ['userx1@0', 'toolx2@0'],
+    'sites 应按消息记录 role 与图片所在层级',
+  );
+  assert.strictEqual(dropped[0].model, 'no-image', '应带上触发的模型 id');
 
   // 支持图片的模型 + 只有工具图：也要报，但计数归到历史
   dropped.length = 0;
   wrapped.stream({ model: 'with-image', messages: [{ role: 'tool', content: [img('t3')] }] });
-  assert.deepStrictEqual(dropped[0], { modelId: 'with-image', images: 1, userImages: 0, historyImages: 1 });
+  assert.deepStrictEqual(
+    { images: dropped[0].images, userImages: dropped[0].userImages, historyImages: dropped[0].historyImages },
+    { images: 1, userImages: 0, historyImages: 1 },
+  );
 
   // 无图时不报（否则每次请求都刷日志）
   dropped.length = 0;
@@ -384,6 +400,37 @@ await t('多层嵌套与多个 tool-result 都能数对', () => {
   }]);
   const hasImage = (bs) => bs.some((b) => b.type === 'image' || (Array.isArray(b.content) && hasImage(b.content)));
   assert.ok(!hasImage(out[0].content), '仍有图片残留');
+});
+
+await t('探针文件：记录真实结构，无降级时不写', () => {
+  // 探针的存在意义：下一轮再出问题时读文件就知道真实形状，不必读源码反推。
+  // 用**子进程**跑：本模块已在当前进程 import 过，同进程内改DSH_HOME 的生效
+  // 时机依赖插件内部读 env 的那一刻，断言不可靠（我在这上面已经踩过一次）。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdpool-probe-'));
+  const entry = pathToFileURL(path.join(ROOT, 'vendor', 'xdpool', 'lib', 'index.js')).href;
+  const script = [
+    `const mod = await import(${JSON.stringify(entry)});`,
+    `const img = { type: 'image', attachment: { attachmentId: 'a' } };`,
+    // 第一次没有图 -> 不该写任何东西
+    `mod.downgradeUnsupportedImages([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], { allowUserImages: true, model: 'm1' });`,
+    // 第二次真实形状 -> 写一行
+    `mod.downgradeUnsupportedImages([{ role: 'tool', content: [{ type: 'tool-result', content: [img] }] }], { allowUserImages: true, model: 'hy4-preview' });`,
+  ].join('\n');
+  try {
+    execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, DSH_HOME: dir },
+      stdio: 'pipe',
+    });
+    const probe = path.join(dir, '.workbuddy-xdpool', 'image-downgrade.log');
+    assert.ok(fs.existsSync(probe), '降级后应写出探针文件');
+    const lines = fs.readFileSync(probe, 'utf8').trim().split('\n');
+    assert.strictEqual(lines.length, 1, '只有真正降级的那次该写一行（无图那次不写）');
+    assert.match(lines[0], /model=hy4-preview/, '探针应记录模型 id');
+    assert.match(lines[0], /images=1/, '探针应记录图片数');
+    assert.match(lines[0], /toolx1@depth1/, '探针应记录 role 与图片所在层级（tool-result 内第 1 层）');
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
+  }
 });
 
 console.log(`\n结果：${pass} 通过，${fail} 失败`);

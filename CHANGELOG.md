@@ -3,6 +3,42 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.27] - 2026-10-04
+
+### 新增：图片降级探针（把「实际发生了什么」变成可读文件）
+
+图片降级已经连错三轮（顶层 vs 嵌套、调用形状、真实库与 app.asar 不同），
+每一轮都要靠读源码反推宿主到底传了什么。这次把猜测换成证据：
+
+每次**真的发生降级**时，往 `~/.dsh/.workbuddy-xdpool/image-downgrade.log`
+追加一行，记录：
+
+```
+2026-10-04T13:06:07.058Z model=hy4-preview images=1 sites=toolx1@depth1
+```
+
+- `model` — 触发的模型 id
+- `images` — 丢弃总数
+- `sites` — 每条消息的 `role x 图片数 @ 图片所在层级`
+  （`toolx1@depth1` = 一条 tool 消息、1 张图、嵌在第 1 层即 tool-result 内）
+
+有了它，下一轮再出问题**读文件即可**，不用再翻源码猜形状。
+
+设计约束：
+- **只在真降级时写** —— 正常会话零开销、无文件增长；无图那次调用不写
+- 超过 256KB 自动轮换（只留最后 64KB），不会无上限增长
+- 写入失败被 try/catch 吞掉 —— 探针绝不能反过来弄坏请求
+- `sites` 里的层级信息正是本插件连错三轮的关键（第一版只扫顶层 depth0）
+
+### 测试
+
+- `test/tool-image-downgrade-test.mjs` 22 项：新增 1 项锁住探针行为
+  （无降级不写文件、降级写且只写一行、记录 model / images / role+层级）
+  —— 用**子进程**跑：本模块已在当前进程 import 过，同进程内改 `DSH_HOME`
+  的生效时机依赖插件内部读 env 的那一刻，断言不可靠（在这上面踩过一次）
+- `dropped` 计数断言改为按字段比对：新增 `sites` / `model` 字段后，
+  整体 `deepStrictEqual` 会因多出的字段而失败
+
 ## [2.0.26] - 2026-10-04
 
 ### 修复：图片嵌在 tool-result 里，净化器漏掉了（这才是真正的根因）

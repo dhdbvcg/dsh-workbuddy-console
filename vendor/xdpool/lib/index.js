@@ -4,7 +4,7 @@ import { createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual 
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { resolveImageAttachmentAccess, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
@@ -3424,12 +3424,34 @@ function hostCompatibleApi() {
 *   消息里的图片走受支持路径，一律保留；为 false 时连user 的图也降级，
 *   并用 userNote 说明原因，避免「模型看不见图」变成一句没有线索的静默丢失。
 */
+/**
+* 把一次降级的真实结构追加到探针文件。
+*
+* 只在**真的降级过**时写（正常会话零开销、无文件增长），一行一条，文件增长
+* 到上限就轮换。写入失败绝不影响请求 —— 调用处已经用 try/catch 包住。
+*/
+function appendImageDowngradeProbe(dropped) {
+	const dir = pluginDataDir();
+	const file = path.join(dir, "image-downgrade.log");
+	const sites = dropped.sites.map((s) => `${s.role}x${s.count}@depth${s.depth.join("/")}`).join(" ");
+	const line = `${new Date().toISOString()} model=${dropped.model ?? "?"} images=${dropped.images} sites=${sites || "?"}\n`;
+	mkdirSync(dir, { recursive: true });
+	// 轮换：超过 256KB 就只留最后 64KB，避免无上限增长
+	try {
+		const st = statSync(file);
+		if (st.size > 262144) {
+			const kept = readFileSync(file, "utf8").slice(-65536);
+			writeFileSync(file, kept);
+		}
+	} catch {}
+	appendFileSync(file, line, "utf8");
+}
 function downgradeUnsupportedImages(messages, options) {
 	const allowUserImages = options?.allowUserImages !== false;
 	const userNote = options?.userNote ?? "[图片未发送：当前模型不支持图片输入]";
 	// 降级是静默的（模型只会看到一行说明），所以把丢弃计数交给调用方记日志 ——
 	// 否则用户只能从「模型怎么没看见我的图」倒推这里发生过什么。
-	const dropped = { images: 0, userImages: 0, historyImages: 0 };
+	const dropped = { images: 0, userImages: 0, historyImages: 0, sites: [], roles: [], model: void 0 };
 	let changed = false;
 	const out = [];
 	for (const message of messages) {
@@ -3451,16 +3473,19 @@ function downgradeUnsupportedImages(messages, options) {
 		*
 		* @returns {{ blocks: object[], count: number, note: string }}
 		*/
-		const replaceImages = (blocks, note) => {
+		const replaceImages = (blocks, note, depth = 0, found = []) => {
 			let count = 0;
 			const next = blocks.map((block) => {
 				if (block?.type === "image") {
 					count += 1;
+					// 记下「图片出现在第几层」—— 这是本插件连错两轮的关键：
+					// 真实会话里图嵌在 tool-result 内（第 1 层），而第一版只扫顶层。
+					found.push(depth);
 					return { type: "text", text: note };
 				}
 				// tool-result 之类带 content 的容器：递归进去，原地替换
 				if (block !== null && typeof block === "object" && Array.isArray(block.content)) {
-					const inner = replaceImages(block.content, note);
+					const inner = replaceImages(block.content, note, depth + 1, found);
 					if (inner.count === 0) return block;
 					count += inner.count;
 					return { ...block, content: inner.blocks };
@@ -3469,14 +3494,15 @@ function downgradeUnsupportedImages(messages, options) {
 			});
 			return { blocks: next, count };
 		};
-		const images = message.content.filter((block) => block?.type === "image").length;
-		const probe = replaceImages(message.content, userNote);
+		const probe = replaceImages(message.content, userNote, 0, dropped.roles);
 		if (probe.count === 0) {
 			out.push(message);
 			continue;
 		}
 		changed = true;
 		dropped.images += probe.count;
+		dropped.sites.push({ role: String(message.role), count: probe.count, depth: [...new Set(dropped.roles)] });
+		dropped.roles.length = 0;
 		if (message.role === "user") dropped.userImages += probe.count; else dropped.historyImages += probe.count;
 		const note = message.role === "user" ? userNote : `[图片输出已省略（${probe.count} 张）]`;
 		// 原位替换：图片块变成一行说明，块序不变 —— 图文混排的相对顺序
@@ -3485,7 +3511,18 @@ function downgradeUnsupportedImages(messages, options) {
 		const { blocks: kept } = replaceImages(message.content, note);
 		out.push({ ...message, content: kept });
 	}
-	if (changed) options?.onDrop?.(dropped);
+	if (changed) {
+		/**
+		* 落一份探针：把「哪条消息、什么 role、图片在第几层」写进插件数据目录。
+		*
+		* 这个插件的图片降级已经连错两轮（顶层 vs 嵌套、调用形状），每次都要靠
+		* 读源码反推。探针把「实际发生了什么」变成可读文件 —— 万一宿主还有
+		* 第四种形状，下一次不用再猜，翻文件即可。
+		*/
+		dropped.model = options?.model;
+		try { appendImageDowngradeProbe(dropped); } catch {}
+		options?.onDrop?.(dropped);
+	}
 	return changed ? out : null;
 }
 /**
@@ -3545,6 +3582,37 @@ function sanitizeHistoryDeep(value, depth, stats) {
 	}
 	return changed ? out : value;
 }
+/**
+ * 调用级探针：记录 adapter 的每次方法调用（含是否找到 messages、图片数）。
+ * 图片降级已经连错三轮，每轮都靠读源码反推宿主行为 —— 这个文件把
+ * 「宿主到底怎么调我们」变成可读证据。只记前 60 条，之后静默，避免增长。
+ */
+let invocationProbeLines = 0;
+function logAdapterInvocation(property, args, found, imgCount) {
+	if (invocationProbeLines >= 60) return;
+	invocationProbeLines += 1;
+	try {
+		const dir = pluginDataDir();
+		mkdirSync(dir, { recursive: true });
+		const summary = args.map((a) => {
+			const t = a === null ? "null" : typeof a;
+			if (t === "object" && Array.isArray(a?.messages)) return t + "(messages:" + a.messages.length + ")";
+			return t;
+		}).join(", ");
+		appendFileSync(join(pluginDataDir(), "adapter-invocations.log"),
+			new Date().toISOString() + " " + String(property) + "(" + summary + ") messagesFound=" + found + " images=" + imgCount + "\n");
+	} catch {}
+}
+function countImagesDeep(blocks, depth) {
+	if (depth > 6 || !Array.isArray(blocks)) return 0;
+	let n = 0;
+	for (const b of blocks) {
+		if (b?.type === "image") n += 1;
+		else if (b !== null && typeof b === "object" && Array.isArray(b.content)) n += countImagesDeep(b.content, depth + 1);
+	}
+	return n;
+}
+
 function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
@@ -3556,14 +3624,18 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 			if (typeof value !== "function") return value;
 			return function (...args) {
 				const stats = { found: false, options: { allowUserImages: true } };
-				const modelId = args.find((a) => a !== null && typeof a === "object" && typeof a === "object" && typeof a.model === "string")?.model
+				const modelId = args.find((a) => a !== null && typeof a === "object" && typeof a.model === "string")?.model
 					?? args.find((a) => a !== null && typeof a === "object" && typeof a.modelId === "string")?.modelId;
 				stats.options.allowUserImages = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
 				stats.options.onDrop = typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0;
+				stats.options.model = modelId; // 探针要记录是哪个模型触发的
 				const patched = args.map((arg) => sanitizeHistoryDeep(arg, 0, stats));
-				if (stats.found && typeof onDrop === "function") {
-					// 递归扫描可能净化多处，这里补一条汇总，便于日志里确认确实动过手
-				}
+				// 调用级探针：无论有没有图都记一条（有上限），这样「代理到底有没有
+				// 被调用、宿主传了什么形状」不再靠推断
+				try {
+					logAdapterInvocation(property, patched, stats.found,
+						patched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0));
+				} catch {}
 				return Reflect.apply(value, target, patched);
 			};
 		}

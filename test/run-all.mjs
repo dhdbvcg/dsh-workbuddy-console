@@ -74,6 +74,7 @@ const TESTS = [
   ['effort-pipeline-test.mjs', '设置 → 请求体 全链路（档位真的发出去）'],
   ['selection-fields-test.mjs', 'selection 字段三处一致（schema/校验/保存）'],
   ['save-preserves-untouched-test.mjs', '保存模型改动不抹掉未触碰的字段'],
+  ['status-latency-test.mjs', 'status 查询并发化 / 在途去重（保存后立即生效）'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
   ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / Max 模式开关 / 保存回写'],

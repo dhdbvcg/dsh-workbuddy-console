@@ -1092,6 +1092,19 @@ const setModelBudget = (id, budget) => {
 						// 「从 status 整体重建」，而不是「草稿叠加已存值」。
 						maxMode
 					});
+					/**
+					* 写完**立即拉一次新状态，然后再丢掉草稿**。
+					*
+					* 顺序是关键。`setDraft(void 0)` 会让界面回落到 `draftFromStatus(status)`，
+					* 而这里的 status 最多落后一轮轮询（30 秒）—— 先丢草稿的话，界面会先
+					* 弹回旧选择，等下一次轮询才变过来，看起来就是「点了保存，好几秒才有
+					* 反应」。这张卡里其它写操作（setDistribution / rescan / 冷却重置…）
+					* 都是写完马上 `await refresh()`，saveModels 是唯一漏掉的，补齐。
+					*
+					* refresh 内部自己接错（失败只 setError 不抛），所以这里不会把
+					* 已经成功的保存误报成失败。
+					*/
+					await refresh(activeRegion);
 					setDraft(void 0);
 					// Same after a successful save: the saved state is now the truth.
 					setMaxModeByRegion((prev) => {

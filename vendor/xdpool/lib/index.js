@@ -5998,44 +5998,47 @@ async function poolWebStatus(deps, region = "cn") {
 	const accounts = deps.pool.list(region);
 	const regions = ["cn", "global"];
 	const selection = deps.catalogs[region].currentSelection();
-	const rows = [];
 	const now = Date.now();
-	for (const account of accounts) {
+	/**
+	* 每个账号的上游查询**并发**发出，而不是串行 await。
+	*
+	* 之前是循环里逐个 `await fetchCredits` + `await fetchCheckinStatus`：
+	* N 个账号就是 2N 次串行往返，每次几百毫秒，一轮 status 轻松好几秒 ——
+	* 卡片保存后的刷新和 30 秒轮询都走这里，用户看到的就是「点了保存，
+	* 界面过好几秒才变」。并发之后一轮的耗时 ≈ 最慢的那一次往返，
+	* 不再随账号数线性变长。
+	*
+	* 每个账号的失败仍然只影响自己那一行（creditsError / checkinError），
+	* 与串行版的语义一致；`noteCredits` 在 JS 单线程里写各自的键，并发安全。
+	*/
+	const rows = await Promise.all(accounts.map(async (account) => {
 		const row = toWebAccount(account, deps.pool.isDisabled(account.id), deps.pool.creditReserveOf(account.id), deps.pool.isReserved(account.id));
 		const earned = deps.scheduler?.().earningsToday[account.id];
 		if (earned !== void 0) Object.assign(row, { automationToday: earned });
 		if (!row.cooling) {
-			try {
-				const credits = await deps.client.fetchCredits(account.credential);
+			const creditsPatch = deps.client.fetchCredits(account.credential).then((credits) => {
 				deps.pool.noteCredits(account.id, credits.total);
-				Object.assign(row, { credits: {
+				return { credits: {
 					total: credits.total,
 					packages: credits.packages,
 					...credits.expiringSoon === void 0 ? {} : { expiringSoon: credits.expiringSoon },
 					...credits.nearestExpiryMs === void 0 ? {} : { nearestExpiryMs: credits.nearestExpiryMs }
-				} });
-			} catch (error) {
-				Object.assign(row, { creditsError: safeMessage(error) });
-			}
-			try {
-				const checkin = await deps.client.fetchCheckinStatus(account.credential);
-				const web = {
-					active: checkin.active,
-					todayCheckedIn: checkin.todayCheckedIn,
-					streakDays: checkin.streakDays,
-					dailyCredit: checkin.dailyCredit,
-					todayCredit: checkin.todayCredit,
-					isStreakDay: checkin.isStreakDay,
-					nextStreakDay: checkin.nextStreakDay,
-					streakBonusCredit: checkin.streakBonusCredit
-				};
-				Object.assign(row, { checkin: web });
-			} catch (error) {
-				Object.assign(row, { checkinError: safeMessage(error) });
-			}
+				} };
+			}, (error) => ({ creditsError: safeMessage(error) }));
+			const checkinPatch = deps.client.fetchCheckinStatus(account.credential).then((checkin) => ({ checkin: {
+				active: checkin.active,
+				todayCheckedIn: checkin.todayCheckedIn,
+				streakDays: checkin.streakDays,
+				dailyCredit: checkin.dailyCredit,
+				todayCredit: checkin.todayCredit,
+				isStreakDay: checkin.isStreakDay,
+				nextStreakDay: checkin.nextStreakDay,
+				streakBonusCredit: checkin.streakBonusCredit
+			} }), (error) => ({ checkinError: safeMessage(error) }));
+			Object.assign(row, ...await Promise.all([creditsPatch, checkinPatch]));
 		}
-		rows.push(row);
-	}
+		return row;
+	}));
 	const cooling = rows.filter((row) => row.cooling).length;
 	const lastServed = deps.pool.lastServedId();
 	const firstUsable = lastServed !== void 0 ? accounts.find((account) => account.id === lastServed) : accounts.find((account) => account.cooldownUntilMs <= now);
@@ -6097,6 +6100,16 @@ async function poolWebStatus(deps, region = "cn") {
 * make this registration disappear.
 */
 function registerPoolStatusRoute(ctx, deps) {
+	/**
+	* 同一区域的在途请求去重。
+	*
+	* 卡片挂载、30 秒轮询、保存后的立即刷新可能撞在一起；上游慢的时候
+	* 每个等待者都会各自起一轮完整查询（2N 次上游往返），纯浪费。
+	* 共享同一个在途 Promise：先到的查询服务所有并发请求，结束后清掉，
+	* 下一个请求再起新的 —— 缓存的是「这一次查询」而不是结果本身，
+	* 所以不会引入任何陈旧读（保存后的刷新拿到的永远包含最新选择）。
+	*/
+	const statusInflight = new Map();
 	ctx.effect(() => {
 		const disposeStatus = ctx.webServer.register({
 			kind: "exact",
@@ -6104,8 +6117,14 @@ function registerPoolStatusRoute(ctx, deps) {
 			handler: async (req, res) => {
 				if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
 				if (!loopbackOrigin(req)) return json(res, 403, { error: "origin-not-trusted" });
+				const region = new URL(req.url ?? "/", "http://localhost").searchParams.get("region") === "global" ? "global" : "cn";
+				let inflight = statusInflight.get(region);
+				if (inflight === void 0) {
+					inflight = poolWebStatus(deps, region).finally(() => statusInflight.delete(region));
+					statusInflight.set(region, inflight);
+				}
 				try {
-					json(res, 200, await poolWebStatus(deps, new URL(req.url ?? "/", "http://localhost").searchParams.get("region") === "global" ? "global" : "cn"));
+					json(res, 200, await inflight);
 				} catch (error) {
 					json(res, 500, { error: safeMessage(error) });
 				}

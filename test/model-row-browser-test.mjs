@@ -88,6 +88,9 @@ window.__boot_error = null;
     window.fetch = function (url) {
       var u = String(url);
       if (u.indexOf('/status') >= 0) {
+        // 计数：保存成功后必须立即刷一次 status（否则界面回落到最多
+        // 30 秒前的旧状态，看起来像「点了保存好几秒才生效」）。
+        window.__STATUS_FETCHES__ = (window.__STATUS_FETCHES__ || 0) + 1;
         return Promise.resolve({ ok: true, json: function () { return Promise.resolve(JSON.parse(JSON.stringify(window.__STATUS__))); } });
       }
       return realFetch.apply(window, arguments);
@@ -445,6 +448,33 @@ try {
         ok('未触碰的思考档位被原样带回（没被这次保存冲掉）');
       } else {
         bad('思考档位在这次保存中丢了：' + JSON.stringify(v.reasoningEfforts));
+      }
+
+      // 保存后必须立即刷新 status（不等 30 秒轮询），否则界面回落到
+      // 旧状态，用户看到的就是「点了保存好几秒才生效」。
+      // 第一次保存后 maxMode 草稿已清、桩里的 savedMaxMode=false，
+      // 开关回到未勾选 —— 再翻一次制造脏状态，按钮才可点。
+      const flip2 = await evalJs(`
+        (function () {
+          var cb = document.querySelector('.dsm-workbuddy-xdpool-maxmode input');
+          if (!cb) return { ok: false };
+          var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked').set;
+          setter.call(cb, true);
+          cb.dispatchEvent(new window.Event('click', { bubbles: true }));
+          return { ok: true };
+        })()
+      `);
+      await new Promise((r) => setTimeout(r, 250));
+      const fetchesBefore = await evalJs('window.__STATUS_FETCHES__ || 0');
+      const click2 = await evalJs('window.__SAVE__()');
+      await new Promise((r) => setTimeout(r, 600));
+      const fetchesAfter = await evalJs('window.__STATUS_FETCHES__ || 0');
+      if (flip2.ok && click2.clicked && fetchesAfter > fetchesBefore) {
+        ok(`保存触发了立即刷新（status 请求 ${fetchesBefore} -> ${fetchesAfter}）`);
+      } else if (!click2.clicked) {
+        bad('第二次点保存没反应：' + click2.reason);
+      } else {
+        bad(`保存后没有立即刷新 status（${fetchesBefore} -> ${fetchesAfter}），界面要等下一轮 30s 轮询`);
       }
     }
   }

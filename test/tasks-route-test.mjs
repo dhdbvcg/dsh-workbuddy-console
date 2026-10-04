@@ -146,5 +146,45 @@ await t('POST /api/tasks/claim 未知 uid → 404（不能领任意账号）', a
   assert.equal(res.out.status, 404);
 });
 
-console.log(`\n结果：${pass} 通过，${fail} 失败\n`);
+console.log('\nstale-while-revalidate（点按钮延迟的另一半来源）');
+
+// 用纯函数判定，不打真实上游 —— 上游要2~5s，测试必须瞬时且确定。
+const D = plugin.tasksCacheDecision;
+const cache = { key: 'default', at: 1000, value: {} };
+const TTL = 30000, STALE = 300000;
+
+await t('TTL 内 → fresh（直接给缓存）', () => {
+  assert.equal(D(cache, 'default', false, TTL, STALE, 1000 + 100), 'fresh');
+});
+
+await t('过了 TTL 但在 stale 窗口内 → stale（先给旧数据、后台刷新）', () => {
+  assert.equal(D(cache, 'default', false, TTL, STALE, 1000 + TTL + 1), 'stale');
+  assert.equal(D(cache, 'default', false, TTL, STALE, 1000 + STALE - 1), 'stale');
+});
+
+await t('超出 stale 窗口 → miss（必须真去拉）', () => {
+  assert.equal(D(cache, 'default', false, TTL, STALE, 1000 + STALE), 'miss');
+});
+
+await t('refresh=1 一律 miss（用户主动要最新）', () => {
+  assert.equal(D(cache, 'default', true, TTL, STALE, 1000), 'miss');
+});
+
+await t('缓存键不同 / 无缓存 / TTL 关闭 → miss', () => {
+  assert.equal(D(cache, 'all', false, TTL, STALE, 1000), 'miss');
+  assert.equal(D(null, 'default', false, TTL, STALE, 1000), 'miss');
+  assert.equal(D(cache, 'default', false, 0, STALE, 1000), 'miss');
+});
+
+await t('stale 窗口至少 5 分钟（成长任务变化很慢，不能刚过期就打上游）', () => {
+  // 生产默认 TTL=30s → stale窗口应远大于 TTL，否则等于没优化
+  const prodTTL = 30000;
+  const prodStale = Math.max(prodTTL * 10, 300000);
+  assert.ok(prodStale >= 300000, `stale 窗口 ${prodStale}ms 太短`);
+  assert.ok(D(cache, 'default', false, prodTTL, prodStale, 1000 + 60000) === 'stale',
+    'TTL 后 1 分钟仍应命中 stale');
+});
+
+console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);
+

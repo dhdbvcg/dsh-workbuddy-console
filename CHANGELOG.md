@@ -3,6 +3,82 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.18] - 2026-10-04
+
+### 修复：无法使用 workbuddy 的模型（模型列表空 / 选不了）
+
+**根因**：provider 注册是异步的，且失败只写一行日志。
+
+vendored 的 `apply()` 在 `Promise.all([cnShim.ready, globalShim.ready])`
+的 `then` 里才向 `ctx.llm` 注册 provider。而它的 `apply()` 是**同步返回**
+的 —— 也就是说宿主拿到 disposer 时，provider 还没注册。
+
+于是 DSH 热重载时存在一个窗口：旧实例的 provider 已经进了
+`ctx.llm.adapters`，但它的 disposer 因为 `apply` 还没返回而**没能被登记**。
+新实例这时再注册同一批 provider：
+
+- `registerAdapter()` 抛 `DUPLICATE_ADAPTER`
+- `registerConfigurableProviders()` 抛 `DUPLICATE_DIRECTORY`
+
+而 vendored 把整段包在 `try` 里，失败只 `ctx.logger.error`，并且 `finally`
+里把**已经成功注册的三个一起撤掉**（all-or-nothing 语义）。
+
+结果就是：插件显示「运行中」、控制台页面完全正常，
+但 workbuddy 模型一个都没有 —— 而且原因只在日志里，从外面完全看不出来。
+
+**修法**（`clearStaleLlmRoutes`）：转发 apply **之前**先按 provider id
+清掉不属于本次的残留注册。只动 `workbuddy-xdpool` /
+`workbuddy-xdpool-global` 两个 id，不碰别的插件，清了几条会打日志。
+
+顺带加了两道防线：
+
+- `watchLlmRegistration`：注册后主动确认 provider 真的进了 `ctx.llm.adapters`，
+  12 秒内没进就把原因写进 `poolError`，`GET /wb-console/api/diag` 能直接看到
+- diag 新增 `llm` 字段（registered / adapters / directory /
+  workbuddyInAdapters），一眼能判断问题出在插件还是宿主
+
+### 优化：继续降低点击延迟
+
+在 2.0.17 的池状态缓存之上再压三处：
+
+**1. in-flight 去重（`callPool`）**
+缓存只能让「第二次以后」快。冷启动时前端并发拉 `/api/mode` 与
+`/api/overview`，两者打的是同一个池 status —— 没有去重就打两次池，
+而且两个请求在池那一侧排成队，第二个仍然要等第一个走完。
+现在同一个 cache key 的并发请求合并成一个 Promise，池只被打 1 次。
+
+**2. 前端并发（`web/app.js` 的 `load`）**
+原来是 `await mode` → `await overview` 串行两次往返，
+改成 `Promise.all` 并发发起。二次点击实测从 ~2.6s 降到 ~1.3s
+（假池延迟 1300ms，见 `test/latency-bench.mjs`）。
+
+**3. 任务列表 stale-while-revalidate（`/api/tasks`）**
+逐账号拉成长任务实测 2.4~4.6s，是「点按钮要等好几秒」的主要来源。
+原来只有 30s TTL 一层，30s 一过就又开始干等。现在加了 stale 窗口
+（`max(TTL*10, 5min)`）：过期后先给旧数据 + `stale: true`，
+后台悄悄刷新；前端看到 `stale` 会在 2.5s 后自动补拉一次，
+用户最终一定看到最新状态，但点击永远是瞬时的。
+
+另外清掉了前端 `/api/overview?credits=1` 这个遗留参数 ——
+后端 overview 路由从来不读它，是个会误导后来人的死参数。
+
+诊断信息：`poolCacheInfo()` 新增 `inflight` 与 `coalesced` 计数，
+`WB_POOL_CACHE_MS` / `WB_TASKS_CACHE_MS` 可调（设为 0 即关闭缓存）。
+
+### 测试
+
+- `test/model-availability-test.mjs`（新增 7 项）：残留注册清理、
+  不误删别的插件、清理有日志、无残留不造噪音、
+  apply 先清后转发、diag 可读、llm 缺失时降级不崩
+- `test/selftest.mjs` 新增 in-flight 去重断言
+- `test/tasks-route-test.mjs` 新增 6 项 stale 判定断言（纯函数，不打网络）
+- `test/latency-bench.mjs`（新增）：`npm run bench:latency`
+  用假池量化优化前后耗时，验证并发不劣化墙钟、池只打 1 次、
+  二次点击命中缓存 <200ms
+
+两个修复都做了「反向验证」：把修复代码改成空实现后，
+对应测试确实会失败（3 项 / 1 项），确认测试不是假信心。
+
 ## [2.0.17] - 2026-10-04
 
 ### 修复：点按钮要等好几秒

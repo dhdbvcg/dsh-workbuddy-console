@@ -217,6 +217,31 @@ await t('池状态短缓存：连续读只打一次池，写操作后立刻失�
   }
 });
 
+await t('in-flight 去重：并发读同一个池只打一次（点击延迟的一半来源）', async () => {
+  // 前端并发拉 /api/mode 与 /api/overview，两者打的是同一个池 status。
+  // 没有 in-flight 去重时，冷启动会打两次池，第二个请求在池侧排队，
+  // 墙钟时间翻倍。去重后第二个直接等同一个 Promise。
+  let poolHits = 0;
+  const { server, port } = await fakePool((url, method) => {
+    poolHits++;
+    return { status: 200, body: { ok: true, accounts: [{ id: 'a' }], models: [] } };
+  });
+  try {
+    const { routes } = harness(port, { creditMeter: false });
+    const mode = routes.get('/wb-console/api/mode');
+    const overview = routes.get('/wb-console/api/overview');
+    assert.ok(mode && overview, 'mode / overview 路由都应存在');
+
+    const p1 = mode.handler({ method: 'GET' }, fakeRes());
+    const p2 = overview.handler({ method: 'GET' }, fakeRes());
+    await Promise.all([p1, p2]);
+
+    assert.equal(poolHits, 1, `并发两个接口应只打一次池，实际打了 ${poolHits} 次`);
+  } finally {
+    server.close();
+  }
+});
+
 console.log('\n代理到 xdpool（用假 HTTP 服务模拟插件）');
 
 function fakePool(handler) {

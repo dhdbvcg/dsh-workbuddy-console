@@ -252,7 +252,14 @@ async function load() {
   flash('');
   $('#btn-refresh').textContent = t('btn.refreshing');
   try {
-    const mode = await api('GET', '/api/mode');
+    // mode 与 overview 打的是同一个池 status，串行等于把同一个慢请求
+    // 等两遍（池 status 实测 1.3s+）。并发发起后墙钟时间只剩一遍。
+    const modeP = api('GET', '/api/mode');
+    // credits=1 是早期遗留参数：后端 overview 路由从来不读它，
+    // 池 status 走的是默认档（不拉每个账号的 credits，2N 次上游往返）。
+    // 余额显示改由 /api/overview 返回的 accounts[].credits 提供。
+    const ovP = api('GET', '/api/overview');
+    const mode = await modeP;
     state.mode = mode.mode;
     state.plugin = mode.plugin;
 
@@ -262,7 +269,7 @@ async function load() {
       $('#mode-line').textContent = t('app.mode.offline', { error: (mode.plugin && mode.plugin.error) || 'unknown' });
     }
 
-    const ov = await api('GET', '/api/overview?credits=1');
+    const ov = await ovP;
     if (!ov.ok) {
       flash(ov.error || t('msg.loadFailed'));
       renderAccounts(null);
@@ -583,8 +590,10 @@ function renderTasks(r) {
 }
 
 async function loadTasks() {
-  $('#btn-tasks').textContent = t('btn.tasksLoading');
-  $('#btn-tasks').disabled = true;
+  const btn = $('#btn-tasks');
+  // 立刻反馈，不要让用户对着没变化的按钮猜是不是没点上
+  btn.textContent = t('btn.tasksLoading');
+  btn.disabled = true;
   try {
     const r = await api('GET', '/api/tasks');
     if (!r.ok) {
@@ -593,9 +602,21 @@ async function loadTasks() {
     }
     renderTasks(r);
     state.tasks = r;
+    // 后端命中 stale 缓存时先给的是旧数据，几秒后后台刷新的会到。
+    // 这里主动补一次，让用户最终一定看到最新状态。
+    if (r.stale) {
+      setTimeout(() => {
+        api('GET', '/api/tasks').then((fresh) => {
+          if (fresh && fresh.ok && !fresh.stale) {
+            renderTasks(fresh);
+            state.tasks = fresh;
+          }
+        }).catch(() => {});
+      }, 2500);
+    }
   } finally {
-    $('#btn-tasks').textContent = t('btn.tasks');
-    $('#btn-tasks').disabled = false;
+    btn.textContent = t('btn.tasks');
+    btn.disabled = false;
   }
 }
 

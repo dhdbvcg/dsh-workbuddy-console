@@ -69,6 +69,7 @@ const TESTS = [
   ['link-vendor-test.mjs', 'vendor 依赖链接 / 自然解析判断'],
   ['volatile-schema-test.mjs', 'volatile 契约 / schemastery 能力 / settings 条目可写'],
   ['apply-idempotent-test.mjs', 'apply 幂等 / 重复注册路由 / 热重载'],
+  ['model-availability-test.mjs', 'workbuddy 模型可用性 / 残留注册清理'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
 ];

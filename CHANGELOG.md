@@ -3,6 +3,41 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.23] - 2026-10-04
+
+### 修复：历史里有图片的旧会话切到 WorkBuddy 模型就发不出去
+
+用户报告：一段旧会话（历史工具结果里带图）切到 WorkBuddy 模型后，整个会话
+报 `UNSUPPORTED_CONTENT: pi.ai cannot represent an image in an in-history …
+message`，完全无法对话。
+
+**根因**：宿主 `PiAiAdapter.stream` 在调用 provider **之前**就把 DSH 历史转成
+pi-ai 历史，`assertSupportedHistory` 遇到非 user 角色的图片块直接抛错。
+官方 DeepSeek 适配器能表示这些图（转 handle + base64），pi-ai 不能 ——
+所以同一段历史换官方模型没事，换本插件就死。
+
+宿主没有留历史改写钩子，唯一能动的是 **adapter 边界**：新增
+`withToolImageDowngrade()` 包住 `PiAiAdapter`，任何拿到 `messages` 的方法
+在进宿主转换器之前，先由 `downgradeToolImageBlocks()` 把非 user 消息里的
+图片块**原位替换**成一行文字说明（`[图片输出已省略（N 张）]`）。
+
+取舍说明：
+- **user 消息里的图片不动** —— 那是 pi-ai 的受支持路径（走附件服务），
+  降级它等于白扔用户刚发的截图
+- 连续多张图只留一条说明，避免刷屏
+- 图片属于**旧上下文**，降级成一行文字远好于整段会话硬失败
+- 净化只在真有图片时发生（快路径返回 `null`），正常会话零开销
+
+### 测试
+
+- `test/tool-image-downgrade-test.mjs`（新增 11 项）：
+  - 降级函数：占位替换 / 仅图片时补说明 / assistant 图片 / user 图片不动 /
+    无图为 `null` 快路径 / 混合消息保持引用 / 非法项不炸
+  - 代理：宿主侧看到的是净化后的 messages、`this` 绑定正确、非方法属性透传
+  - **端到端**：真 `PiAiAdapter` + 真 provider + 本地 HTTP 服务器当 shim ——
+    断言请求真的到达 shim，且请求体里工具消息不再含 `image_url` / `data:image`
+  - **反向验证**：关掉包装后立刻复现「shim 没收到任何请求」，确认测试非假信心
+
 ## [2.0.22] - 2026-10-04
 
 ### 修复：advertise `shigh` 的模型在 DSH 自带列表里丢「超高」档

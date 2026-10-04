@@ -3402,6 +3402,73 @@ function hostCompatibleApi() {
 	};
 }
 /**
+* DSH 历史消息里，**非 user 角色**携带的图片块在 pi-ai 里没有对应的线格式
+* （工具结果是纯文本；assistant 结构化图片输出同样无法表示），宿主的
+* `PiAiAdapter.stream` 在调用 provider 之前就会抛
+* `UNSUPPORTED_CONTENT: pi-ai cannot represent an image in an in-history … message`。
+* 官方 DeepSeek 适配器能把这些图转成 handle+base64，所以同一段历史用官方模型没事、
+* 切到本插件就整个会话发不出去。
+*
+* 宿主没有留历史改写钩子，所以唯一能动手的位置是 adapter 边界：
+* `downgradeToolImageBlocks` 在请求进入宿主转换器之前，把非 user 消息里的
+* 图片块替换成文字占位。历史图片属于旧上下文，降级成一行说明远好于整段会话
+* 硬失败；user 消息里的图片是 pi-ai 的受支持路径（走附件服务），保持原样。
+*/
+function downgradeToolImageBlocks(messages) {
+	let changed = false;
+	const out = [];
+	for (const message of messages) {
+		if (message === null || typeof message !== "object" || message.role === "user" || !Array.isArray(message.content)) {
+			out.push(message);
+			continue;
+		}
+		const images = message.content.filter((block) => block?.type === "image");
+		if (images.length === 0) {
+			out.push(message);
+			continue;
+		}
+		changed = true;
+		// 原位替换：图片块变成一行说明，块序不变 —— 工具结果里图文混排的
+		// 相对顺序对模型仍有意义。改成「过滤掉图片、末尾补一条」会把说明
+		// 挪到内容末尾，看起来像另一段输出。
+		const note = `[图片输出已省略（${images.length} 张）]`;
+		const kept = [];
+		for (const block of message.content) {
+			if (block?.type !== "image") {
+				kept.push(block);
+				continue;
+			}
+			// 连续多张图只留一条说明，避免刷屏
+			if (kept.length === 0 || kept.at(-1)?.text !== note) kept.push({ type: "text", text: note });
+		}
+		out.push({ ...message, content: kept });
+	}
+	return changed ? out : null;
+}
+/**
+* 把一个 LlmAdapter 包成「进宿主转换器之前先净化历史」的版本。
+*
+* 用代理而不是逐方法重写：宿主在 `stream`（以及将来可能新增的入口）里读
+* `options.messages`，任何拿到带 `messages` 数组参数的方法都先过一遍净化。
+* 净化失败绝不吞掉原请求 —— 按原样放行，让宿主按它自己的语义报错。
+*/
+function withToolImageDowngrade(adapter) {
+	return new Proxy(adapter, {
+		get(target, property, receiver) {
+			const value = Reflect.get(target, property, receiver);
+			if (typeof value !== "function") return value;
+			return function (...args) {
+				const patched = args.map((arg) => {
+					if (arg === null || typeof arg !== "object" || !Array.isArray(arg.messages)) return arg;
+					const next = downgradeToolImageBlocks(arg.messages);
+					return next === null ? arg : { ...arg, messages: next };
+				});
+				return Reflect.apply(value, target, patched);
+			};
+		}
+	});
+}
+/**
 * Assemble the adapter. `getModels` re-reads the live catalog, and every
 * model's `baseUrl` is re-resolved per read so the shim's ephemeral port
 * applies from the first snapshot after startup. Call only after `shim.ready`.
@@ -3472,13 +3539,13 @@ function createWorkBuddyAdapter(options) {
 	return {
 		providerId,
 		displayName,
-		adapter: new PiAiAdapter({
+		adapter: withToolImageDowngrade(new PiAiAdapter({
 			profiles: () => profiles,
 			auth: INERT_AUTH,
 			resolveApiKey: async () => shim.token(),
 			resolveAttachments: () => options.ctx.get("attachments"),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
-		}),
+		})),
 		buildModels,
 		defaultEffort,
 		invalidate: () => {
@@ -7066,4 +7133,4 @@ function apply(ctx, config = {}) {
 	});
 }
 //#endregion
-export { APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };
+export { downgradeToolImageBlocks, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };

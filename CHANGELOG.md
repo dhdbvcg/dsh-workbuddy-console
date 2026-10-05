@@ -3,6 +3,41 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.37] - 2026-10-05
+
+### 修复：兜底探针位置错误 —— 自己制造的观测盲区
+
+v2.0.35 把 `shim-requests.log` 的写入放在 **bearer / Host / Origin 校验之后**。
+于是任何被 401/403 拦掉的请求**完全不留痕迹** —— 看起来就像「请求根本
+没到达 shim」，从而把排查引向错误方向。
+
+**探针必须放在最靠前的位置，早于一切可能提前 return 的分支。**
+这是通用原则：只要探针前面还有 `return`，观测就是有条件的、会骗人的。
+
+修正后：
+
+- 写在 `handle()` 开头的第一步（早于所有校验）
+- 用 `res.on("close")` 记录**最终状态码**，并在 `writeHead` 上取值
+- 一并记录 `host` / `origin` / `hasAuth` / 耗时 —— 这样「到了但被拒」
+  与「根本没到」能一眼区分
+
+### 本地验证（真实 shim，不是假对象）
+
+起了真实的 `createWorkBuddyShim`，打两个**无鉴权**请求（预期被 401 拦掉）：
+
+```
+2026-10-05T05:41:27.907Z POST /v1/chat/completions status=401 host=127.0.0.1:63473 origin=- hasAuth=n ms=23
+2026-10-05T05:41:27.947Z GET  /healthz              status=401 host=127.0.0.1:63473 origin=- hasAuth=n ms=6
+```
+
+被拒的请求也留痕，盲区消除。
+
+### 附带发现
+
+无 `Authorization` 的请求会被 401 拦掉（鉴权是强制的）。若 pi-ai 因故未带上
+正确 bearer，请求会止步于此并报 `missing or invalid Authorization bearer`
+—— 那与当前的 width 错误不同，可据此区分两种失败。
+
 ## [2.0.36] - 2026-10-05
 
 ### 修复：块上元数据完好、但附件文件已丢失的图片（第五层）

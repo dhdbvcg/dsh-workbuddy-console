@@ -5742,6 +5742,39 @@ function createWorkBuddyShim(options) {
 		} catch {}
 	}
 	async function handle(req, res) {
+		/**
+		* 兜底请求日志：记录**每一个**到达 shim 的请求，位置在**所有校验之前**。
+		*
+		* 我第一版把日志放在 bearer 校验之后 —— 于是被 401/403 拦掉的请求
+		* 完全不留痕迹，看起来就像「请求根本没到」。这是自己给自己制造的
+		* 观测盲区：**探针必须放在最靠前的位置，早于任何可能提前 return 的分支。**
+		*
+		* 一并记录最终状态码，这样「到了但被拒」与「根本没到」能一眼区分。
+		*/
+		const startedAt = Date.now();
+		const url0 = req.url ?? "/";
+		let loggedStatus = void 0;
+		const originalWriteHead = res.writeHead.bind(res);
+		res.writeHead = (...args) => {
+			loggedStatus = args[0];
+			return originalWriteHead(...args);
+		};
+		res.on("close", () => {
+			try {
+				const dir = pluginDataDir();
+				mkdirSync(dir, { recursive: true });
+				const file = join(dir, "shim-requests.log");
+				rotateProbeFile(file);
+				appendFileSync(file, new Date().toISOString()
+					+ " " + req.method + " " + url0.slice(0, 160)
+					+ " status=" + (loggedStatus ?? "?")
+					+ " host=" + String(req.headers.host ?? "-")
+					+ " origin=" + String(req.headers.origin ?? "-")
+					+ " hasAuth=" + (typeof req.headers.authorization === "string" ? "y" : "n")
+					+ " ms=" + (Date.now() - startedAt)
+					+ "\n");
+			} catch {}
+		});
 		try {
 			if (!hostIsLoopback(req.headers.host)) {
 				writeOpenAIError(res, 403, "host_not_allowed", "Host header must name the loopback interface");
@@ -5756,21 +5789,6 @@ function createWorkBuddyShim(options) {
 				return;
 			}
 			const url = req.url ?? "/";
-			/**
-			* 兜底请求日志：记录**所有**到达 shim 的请求（方法 + 路径）。
-			*
-			* upstream-request-shape.log 与 upstream-errors.log 始终没被创建，
-			* 说明 chatCompletions 从未执行 —— 那么「请求是否到达 shim」本身
-			* 就成了必须观测的事，而不是可以假设的事。只记方法+路径，
-			* 路径可能含 query（那也是重要线索）。
-			*/
-			try {
-				const dir = pluginDataDir();
-				mkdirSync(dir, { recursive: true });
-				const file = join(dir, "shim-requests.log");
-				rotateProbeFile(file);
-				appendFileSync(file, new Date().toISOString() + " " + req.method + " " + url.slice(0, 200) + "\n");
-			} catch {}
 			if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) {
 				writeJson(res, 200, {
 					ok: true,

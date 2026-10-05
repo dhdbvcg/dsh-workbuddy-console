@@ -5818,12 +5818,16 @@ function createWorkBuddyShim(options) {
 		*/
 		const startedAt = Date.now();
 		const url0 = req.url ?? "/";
-		let loggedStatus = void 0;
-		const originalWriteHead = res.writeHead.bind(res);
-		res.writeHead = (...args) => {
-			loggedStatus = args[0];
-			return originalWriteHead(...args);
-		};
+		/**
+		* **不要覆盖 `res.writeHead`。**
+		*
+		* 我第一版为了取状态码直接给 `res.writeHead` 赋值 —— 那是对宿主 HTTP
+		* 对象做侵入性改写。即便本地验证通过，也不该在排查期引入这种风险：
+		* 一旦宿主对 res 做了冻结/代理/自有封装，赋值可能抛错，而这类错误
+		* 发生在请求路径上，会被上层包装成难以归因的失败。
+		*
+		* `res.statusCode` 是标准可读属性，`finish` 事件后取值即可 —— 零侵入。
+		*/
 		res.on("close", () => {
 			try {
 				const dir = pluginDataDir();
@@ -5832,7 +5836,8 @@ function createWorkBuddyShim(options) {
 				rotateProbeFile(file);
 				appendFileSync(file, new Date().toISOString()
 					+ " " + req.method + " " + url0.slice(0, 160)
-					+ " status=" + (loggedStatus ?? "?")
+					+ " status=" + String(res.statusCode ?? "?")
+					+ " aborted=" + String(res.writableEnded === true ? "n" : "y")
 					+ " host=" + String(req.headers.host ?? "-")
 					+ " origin=" + String(req.headers.origin ?? "-")
 					+ " hasAuth=" + (typeof req.headers.authorization === "string" ? "y" : "n")

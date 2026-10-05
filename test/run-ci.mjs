@@ -40,6 +40,7 @@ const TESTS = [
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
   ['check-test.mjs', 'JWT / 凭证扫描 / 探活判定 / 体检 / 登录白名单'],
   ['tasks-test.mjs', '任务读取 / 状态归类 / 批量汇总'],
+  ['image-size-normalize-test.mjs', '附件尺寸规范化 / 不把坏尺寸送进上游'],
 ];
 
 console.log(`CI 测试（${ROOT}）\n`);

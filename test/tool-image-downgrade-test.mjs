@@ -41,7 +41,11 @@ const { downgradeUnsupportedImages, withToolImageDowngrade, WorkBuddyCatalog, cr
 
 console.log('\n历史工具消息带图 → 仍可发请求');
 
-const img = (id = 'att-1') => ({ type: 'image', attachment: { attachmentId: id } });
+// 真实图片块带 width/height —— pi-ai 据此拼「request preview WxHpx」发给模型，
+// 缺失即失效附件（上游会拒）。假数据必须带尺寸，否则测的不是真实形状。
+const img = (id = 'att-1', width = 1920, height = 1080) => ({ type: 'image', attachment: { attachmentId: id, width, height } });
+/** 失效附件：没有尺寸信息 */
+const deadImg = (id = 'att-dead') => ({ type: 'image', attachment: { attachmentId: id } });
 const txt = (text) => ({ type: 'text', text });
 
 // ——— 1. 降级函数 ———
@@ -472,7 +476,7 @@ await t('旧历史里的 user 图片也降级，只留最近几条消息的（�
   // 回归：2057 条消息、25 张历史图 —— 上游网关拒绝其中一张失效旧附件
   //（"Image request width must be a positive integer"，文本来自上游而非本地包）。
   // 与其逐张排查旧附件，不如只保留最近 3 条消息里的图：新截图要保，旧截图本就该弃。
-  const img = (id) => ({ type: 'image', attachment: { attachmentId: id } });
+  const img = (id) => ({ type: 'image', attachment: { attachmentId: id, width: 1920, height: 1080 } });
   const messages = [
     { role: 'user', content: [img('old-1'), txt('很久以前')] },
     { role: 'assistant', content: [txt('好的')], source: { kind: 'model' } },
@@ -486,7 +490,39 @@ await t('旧历史里的 user 图片也降级，只留最近几条消息的（�
   assert.strictEqual(out[2].content.some((b) => b.type === 'image'), true, 'index2 在最后 3 条窗口内，应保留');
   assert.strictEqual(out[4].content.some((b) => b.type === 'image'), true, '最近消息里的图必须保留');
   // 降级说明带原因
-  assert.match(out[0].content[0].text, /不支持图片输入|图片未发送/, 'user 图降级应有说明');
+  assert.match(out[0].content[0].text, /不支持图片输入|图片未发送|附件已失效/, 'user 图降级应有说明');
+});
+
+await t('尺寸元数据无效的图片（失效附件）被剔除，有效的照常保留', () => {
+  // 根因：图片块自带 attachment.width/height，pi-ai 据此拼出
+  // 「request preview {w}x{h}px」发给模型（requestImageHandleText）。
+  // 附件被清理后 width/height 缺失或为 0，上游解析这句说明时报
+  //「Image request width must be a positive integer」——
+  // 而此时请求里确实带着图，不是「没有图」的问题。
+  const good = { type: 'image', attachment: { attachmentId: 'a1', name: 'shot.png', width: 1920, height: 1080 } };
+  const dead = { type: 'image', attachment: { attachmentId: 'a2', name: 'old.png' } };
+  const zero = { type: 'image', attachment: { attachmentId: 'a3', width: 0, height: 0 } };
+  const nImg = (bs) => bs.filter((b) => b?.type === 'image').length;
+
+  // 混合：有效的必须留下，只有失效的被替换
+  const mixed = downgradeUnsupportedImages([
+    { role: 'user', content: [txt('hi')] },
+    { role: 'assistant', content: [txt('ok')], source: { kind: 'model' } },
+    { role: 'user', content: [good, dead, txt('看图')] },
+  ], { allowUserImages: true });
+  assert.strictEqual(nImg(mixed[2].content), 1, '有效图应保留，只剔除失效那张');
+  assert.match(JSON.stringify(mixed[2].content), /附件已失效/, '应写入失效原因说明');
+
+  // 全部有效 -> 零改动（快路径）
+  assert.strictEqual(
+    downgradeUnsupportedImages([{ role: 'user', content: [good, txt('新图')] }], { allowUserImages: true }),
+    null,
+    '全部有效时不该改动',
+  );
+
+  // 全部失效（缺字段 / 为 0 两种）
+  const allDead = downgradeUnsupportedImages([{ role: 'user', content: [dead, zero] }], { allowUserImages: true });
+  assert.strictEqual(nImg(allDead[0].content), 0, '缺字段与为 0 都算失效');
 });
 
 console.log(`\n结果：${pass} 通过，${fail} 失败`);

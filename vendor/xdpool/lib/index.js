@@ -3472,7 +3472,40 @@ function downgradeUnsupportedImages(messages, options) {
 			continue;
 		}
 		if (message.role === "user" && allowUserImages && index >= keepFrom) {
-			out.push(message);
+			/**
+			* 保留窗口内的 user 图片，但**尺寸元数据无效的仍要剔除**。
+			*
+			* 这一支原来直接 push 原消息、完全绕过降级，于是「窗口内 + 失效附件」
+			* 的组合会漏过去：pi-ai 照样用attachment.width/height 拼出
+			* 「request preview 0x0px」的说明，上游报
+			*「Image request width must be a positive integer」。
+			*
+			* 只有**全部**图片块都有效时，才原样保留（快路径，零拷贝）。
+			*/
+			const refs = message.content.filter((b) => b?.type === "image").map((b) => b.attachment ?? {});
+			const allValid = refs.every((r) => Number.isFinite(r.width) && r.width > 0 && Number.isFinite(r.height) && r.height > 0);
+			if (allValid) {
+				out.push(message);
+				continue;
+			}
+			// 有失效图 -> 逐块剔除，其余内容原样
+			const kept = [];
+			for (const block of message.content) {
+				if (block?.type !== "image") { kept.push(block); continue; }
+				const r = block.attachment ?? {};
+				// 逐块判断：有效的**照常保留**（走pi-ai 附件路径），只剔除失效的
+				if (Number.isFinite(r.width) && r.width > 0 && Number.isFinite(r.height) && r.height > 0) {
+					kept.push(block);
+					continue;
+				}
+				changed = true;
+				dropped.images += 1;
+				dropped.userImages += 1;
+				dropped.sites.push({ role: "user", count: 1, depth: [0] });
+				dropped.roles.push(0);
+				kept.push({ type: "text", text: "[图片未发送：附件已失效（缺少尺寸信息）]" });
+			}
+			out.push({ ...message, content: kept });
 			continue;
 		}
 		/**
@@ -3493,6 +3526,9 @@ function downgradeUnsupportedImages(messages, options) {
 					// 记下「图片出现在第几层」—— 这是本插件连错两轮的关键：
 					// 真实会话里图嵌在 tool-result 内（第 1 层），而第一版只扫顶层。
 					found.push(depth);
+					// 这条路径上的图本来就一律降级（tool/assistant/窗口外的 user），
+					// 文案统一为「已省略」。失效附件的**特殊**文案只用在下面
+					// 「保留 user 图」那一支 —— 那里图片会被真的发出去。
 					return { type: "text", text: note };
 				}
 				// tool-result 之类带 content 的容器：递归进去，原地替换

@@ -5711,6 +5711,21 @@ function createWorkBuddyShim(options) {
 				return;
 			}
 			const url = req.url ?? "/";
+			/**
+			* 兜底请求日志：记录**所有**到达 shim 的请求（方法 + 路径）。
+			*
+			* upstream-request-shape.log 与 upstream-errors.log 始终没被创建，
+			* 说明 chatCompletions 从未执行 —— 那么「请求是否到达 shim」本身
+			* 就成了必须观测的事，而不是可以假设的事。只记方法+路径，
+			* 路径可能含 query（那也是重要线索）。
+			*/
+			try {
+				const dir = pluginDataDir();
+				mkdirSync(dir, { recursive: true });
+				const file = join(dir, "shim-requests.log");
+				rotateProbeFile(file);
+				appendFileSync(file, new Date().toISOString() + " " + req.method + " " + url.slice(0, 200) + "\n");
+			} catch {}
 			if (req.method === "GET" && (url === "/healthz" || url === "/healthz/")) {
 				writeJson(res, 200, {
 					ok: true,

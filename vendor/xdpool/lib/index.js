@@ -5852,6 +5852,28 @@ function createWorkBuddyShim(options) {
 				status: result.status,
 				message: result.message
 			};
+			/**
+			* 上游失败的现场记录：状态码 + 错误文本 + 出错模型。
+			*
+			* 「Image request width must be a positive integer」这句话在本地所有包里
+			* 都搜不到（app.asar 整包、npm 全局 2728 个文件、pi-ai dist），
+			* 只能来自上游 —— 但**是哪个请求触发的**之前完全不可见。
+			* 这里把现场落盘：出错模型 + HTTP 状态 + 上游原文（截断）。
+			* 只记错误文本，不记请求内容。
+			*/
+			try {
+				const dir = pluginDataDir();
+				mkdirSync(dir, { recursive: true });
+				const file = join(dir, "upstream-errors.log");
+				rotateProbeFile(file);
+				appendFileSync(file, new Date().toISOString()
+					+ " model=" + (modelId ?? "?")
+					+ " account=" + account.label
+					+ " kind=" + result.kind
+					+ " status=" + result.status
+					+ " msg=" + String(result.message).slice(0, 300).replace(/\s+/g, " ")
+					+ "\n");
+			} catch {}
 			if (result.kind === "session_dead") {
 				logger?.warn(`dsh-workbuddy-xdpool: ${account.label} session dead; refreshing token and retrying`);
 				await pool.refreshAccount(account.id);

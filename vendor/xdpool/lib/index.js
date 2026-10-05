@@ -3599,16 +3599,27 @@ function sanitizeHistoryDeep(value, depth, stats) {
  * 图片降级已经连错三轮，每轮都靠读源码反推宿主行为 —— 这个文件把
  * 「宿主到底怎么调我们」变成可读证据。
  *
- * 配额分开计：**带 messages 的调用上限 60**（真正要观测的对象），
- * 其它（resolveModel / listModels 等 UI 噪声）上限 20。否则启动时几十条
- * 模型列表查询会把配额耗光，等用户真正发消息时反而不记了 —— 那样探针
- * 恰好在最关键的时刻失效。
+ * 配额与轮换：重试很频繁（每 10 秒一次就能烧掉几十条），固定上限会让探针
+ * 在关键时刻恰好失声。改为**写满就轮换**（只留最近 200 行），保证文件里
+ * 永远是「最近发生过什么」，而不是「启动初期发生过什么」。
  */
+const PROBE_MAX_LINES = 400;
+const PROBE_KEEP_LINES = 200;
 let messageProbeLines = 0;
 let noiseProbeLines = 0;
+function rotateProbeFile(file) {
+	try {
+		const raw = readFileSync(file, "utf8");
+		const lines = raw.split("\n").filter((l) => l.trim() !== "");
+		if (lines.length <= PROBE_MAX_LINES) return;
+		writeFileSync(file, lines.slice(-PROBE_KEEP_LINES).join("\n") + "\n");
+	} catch {}
+}
 function logAdapterInvocation(property, args, found, imgCount) {
+	// 「重试」不该消耗配额：同一个方法+形状重复出现只保留前若干次，
+	// 否则十秒一次的自动重试会把配额瞬间烧光。
 	if (found) {
-		if (messageProbeLines >= 60) return;
+		if (messageProbeLines >= 120) return;
 		messageProbeLines += 1;
 	} else {
 		if (noiseProbeLines >= 20) return;
@@ -3622,7 +3633,9 @@ function logAdapterInvocation(property, args, found, imgCount) {
 			if (t === "object" && Array.isArray(a?.messages)) return t + "(messages:" + a.messages.length + ")";
 			return t;
 		}).join(", ");
-		appendFileSync(join(pluginDataDir(), "adapter-invocations.log"),
+		const file = join(dir, "adapter-invocations.log");
+		rotateProbeFile(file);
+		appendFileSync(file,
 			new Date().toISOString() + " " + String(property) + "(" + summary + ") messagesFound=" + found + " images=" + imgCount + "\n");
 	} catch {}
 }
@@ -5735,6 +5748,61 @@ function createWorkBuddyShim(options) {
 		}
 	}
 	/**
+	* 把发往上游的请求**结构**记下来（不含任何正文内容）。
+	*
+	* 上游报「Image request width must be a positive integer」而请求里一张图都没有
+	* （探针证实 images=0）—— 说明问题字段藏在别处。只有把请求的键名、
+	* width/height 一类数值字段、以及各 content 部分的类型分布记下来，才能定位。
+	* 只记结构不记内容：正文可能包含用户的私密对话，探针绝不能落盘内容。
+	*/
+	function logUpstreamShape(modelId, body) {
+		if (typeof body !== "object" || body === null || Array.isArray(body)) return;
+		try {
+			const dir = pluginDataDir();
+			mkdirSync(dir, { recursive: true });
+			const file = join(dir, "upstream-request-shape.log");
+			rotateProbeFile(file);
+			// 数值型字段（含 width/height 这类可能被上游校验的）
+			const numeric = Object.entries(body)
+				.filter(([, v]) => typeof v === "number" || typeof v === "boolean")
+				.map(([k, v]) => k + "=" + String(v))
+				.join(",");
+			// content 部分的类型直方图（不记文本）
+			const partTally = new Map();
+			const walk = (node, depth) => {
+				if (depth > 6 || node === null || typeof node !== "object") return;
+				if (Array.isArray(node)) { for (const v of node) walk(v, depth + 1); return; }
+				if (Array.isArray(node.content)) {
+					for (const part of node.content) {
+						const t = part?.type ?? "(none)";
+						partTally.set(t, (partTally.get(t) ?? 0) + 1);
+					}
+				}
+				for (const v of Object.values(node)) if (v && typeof v === "object") walk(v, depth + 1);
+			};
+			walk(body, 0);
+			const parts = [...partTally.entries()].map(([k, n]) => k + "x" + n).join(",");
+			// 顶层键 + 可能含尺寸信息的深层字段
+			const sizeish = [];
+			const findSize = (node, depth, pathStr) => {
+				if (depth > 6 || node === null || typeof node !== "object") return;
+				if (Array.isArray(node)) { node.forEach((v, i) => findSize(v, depth + 1, pathStr + "[" + i + "]")); return; }
+				for (const [k, v] of Object.entries(node)) {
+					if (/width|height|size|resolution/i.test(k) && (typeof v === "number" || typeof v === "string" || v === null)) {
+						sizeish.push(pathStr + "." + k + "=" + JSON.stringify(v));
+					} else if (v && typeof v === "object") findSize(v, depth + 1, pathStr + "." + k);
+				}
+			};
+			findSize(body, 0, "");
+			appendFileSync(file, new Date().toISOString()
+				+ " model=" + (modelId ?? "?")
+				+ " keys=" + Object.keys(body).join("|")
+				+ " numeric=[" + numeric + "]"
+				+ " parts=[" + parts + "]"
+				+ " sizeFields=[" + sizeish.slice(0, 12).join(" ") + "]\n");
+		} catch {}
+	}
+	/**
 	* Serve one chat completion, rotating accounts on rate limits.
 	*
 	* A rate-limited account is cooled for exactly the window the upstream
@@ -5753,6 +5821,7 @@ function createWorkBuddyShim(options) {
 		try {
 			const parsed = JSON.parse(raw);
 			modelId = typeof parsed.model === "string" && parsed.model !== "" ? parsed.model : void 0;
+			logUpstreamShape(modelId, parsed);
 		} catch {
 			modelId = void 0;
 		}

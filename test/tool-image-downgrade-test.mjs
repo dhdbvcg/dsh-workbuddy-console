@@ -525,5 +525,34 @@ await t('尺寸元数据无效的图片（失效附件）被剔除，有效的�
   assert.strictEqual(nImg(allDead[0].content), 0, '缺字段与为 0 都算失效');
 });
 
+await t('附件文件不可读的图片也被剔除（块上元数据完好但文件已丢失）', () => {
+  // 根因：块上的 width/height 可能是陈旧的 —— 附件文件早被清理、元数据还留着。
+  // 此时尺寸检查通过，pi-ai 去读文件却读不到，上游照样报
+  //「Image request width must be a positive integer」。
+  // 故用宿主附件服务的 imageHostPath(ref)（返回 undefined 即文件不存在）。
+  const good = { type: 'image', attachment: { attachmentId: 'ok', width: 1920, height: 1080 } };
+  const ghost = { type: 'image', attachment: { attachmentId: 'gone', width: 1920, height: 1080 } };
+  const nImg = (bs) => bs.filter((b) => b?.type === 'image').length;
+
+  // 文件不存在 -> 剔除
+  let out = downgradeUnsupportedImages([{ role: 'user', content: [good, ghost] }], {
+    allowUserImages: true,
+    isImageUsable: (ref) => ref.attachmentId !== 'gone',
+  });
+  assert.strictEqual(nImg(out[0].content), 1, '文件丢失的图应被剔除，好的留下');
+  assert.match(JSON.stringify(out[0].content), /附件已失效/, '应说明失效原因');
+
+  // 判定器抛错 -> 按可用处理（宽松方向，不误杀）
+  out = downgradeUnsupportedImages([{ role: 'user', content: [good] }], {
+    allowUserImages: true,
+    isImageUsable: () => { throw new Error('service down'); },
+  });
+  assert.strictEqual(out, null, '判不出来时不该改动');
+
+  // 未提供判定器 -> 只按尺寸判断（向后兼容）
+  out = downgradeUnsupportedImages([{ role: 'user', content: [good] }], { allowUserImages: true });
+  assert.strictEqual(out, null, '没提供判定器时行为不变');
+});
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

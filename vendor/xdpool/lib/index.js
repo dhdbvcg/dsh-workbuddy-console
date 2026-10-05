@@ -3461,6 +3461,31 @@ function downgradeUnsupportedImages(messages, options) {
 	* 条消息里的图片，更早的一律降级。
 	*/
 	const keepFrom = Math.max(0, messages.length - (options?.keepLastMessages ?? 3));
+	/**
+	* 一张图片是否**真的**能发出去。
+	*
+	* 两层检查，缺一不可：
+	* 1. 块上有没有合法的 width/height —— pi-ai 用它们拼
+	*    「request preview WxHpx」；缺失/为 0 时上游报
+	*    「Image request width must be a positive integer」。
+	* 2. 附件**文件是否还在** —— 这是块上元数据看不出来的！
+	*    实测这台机器的 `~/.dsh/attachments/v1/files/` 只剩一个 txt，
+	*    截图原文件早已被清理；此时块上仍可能留着 width/height，
+	*    于是检查 1 通过、pi-ai 去读文件却读不到，上游照样报错。
+	*    故用宿主附件服务的 `imageHostPath(ref)` 判定（返回 undefined 即失效）。
+	*
+	* 判定不出来时按「可用」处理 —— 宽松方向，宁可让宿主报它自己的错，
+	* 也不要误杀用户刚发的图。
+	*/
+	const imageOk = (block) => {
+		const ref = block?.attachment ?? {};
+		const sized = Number.isFinite(ref.width) && ref.width > 0 && Number.isFinite(ref.height) && ref.height > 0;
+		if (!sized) return false;
+		if (typeof options?.isImageUsable === "function") {
+			try { return options.isImageUsable(ref) !== false; } catch { return true; }
+		}
+		return true;
+	};
 	// 降级是静默的（模型只会看到一行说明），所以把丢弃计数交给调用方记日志 ——
 	// 否则用户只能从「模型怎么没看见我的图」倒推这里发生过什么。
 	const dropped = { images: 0, userImages: 0, historyImages: 0, sites: [], roles: [], model: void 0 };
@@ -3473,17 +3498,17 @@ function downgradeUnsupportedImages(messages, options) {
 		}
 		if (message.role === "user" && allowUserImages && index >= keepFrom) {
 			/**
-			* 保留窗口内的 user 图片，但**尺寸元数据无效的仍要剔除**。
+			* 保留窗口内的 user 图片，但**真的能发出去的才留**。
 			*
 			* 这一支原来直接 push 原消息、完全绕过降级，于是「窗口内 + 失效附件」
-			* 的组合会漏过去：pi-ai 照样用attachment.width/height 拼出
-			* 「request preview 0x0px」的说明，上游报
+			* 的组合会漏过去：pi-ai 照样用 attachment.width/height 拼出
+			* 「request preview WxHpx」的说明，上游报
 			*「Image request width must be a positive integer」。
 			*
-			* 只有**全部**图片块都有效时，才原样保留（快路径，零拷贝）。
+			* 只有**全部**图片块都可用时才原样保留（快路径，零拷贝）。
 			*/
-			const refs = message.content.filter((b) => b?.type === "image").map((b) => b.attachment ?? {});
-			const allValid = refs.every((r) => Number.isFinite(r.width) && r.width > 0 && Number.isFinite(r.height) && r.height > 0);
+			const hasAnyImage = message.content.some((b) => b?.type === "image");
+			const allValid = message.content.every((b) => (b?.type !== "image" ? true : imageOk(b)));
 			if (allValid) {
 				out.push(message);
 				continue;
@@ -3492,9 +3517,8 @@ function downgradeUnsupportedImages(messages, options) {
 			const kept = [];
 			for (const block of message.content) {
 				if (block?.type !== "image") { kept.push(block); continue; }
-				const r = block.attachment ?? {};
-				// 逐块判断：有效的**照常保留**（走pi-ai 附件路径），只剔除失效的
-				if (Number.isFinite(r.width) && r.width > 0 && Number.isFinite(r.height) && r.height > 0) {
+				// 逐块判断：可用的**照常保留**（走 pi-ai 附件路径），只剔除失效的
+				if (imageOk(block)) {
 					kept.push(block);
 					continue;
 				}
@@ -3503,8 +3527,9 @@ function downgradeUnsupportedImages(messages, options) {
 				dropped.userImages += 1;
 				dropped.sites.push({ role: "user", count: 1, depth: [0] });
 				dropped.roles.push(0);
-				kept.push({ type: "text", text: "[图片未发送：附件已失效（缺少尺寸信息）]" });
+				kept.push({ type: "text", text: "[图片未发送：附件已失效（文件不可读）]" });
 			}
+			if (hasAnyImage) dropped.model = options?.model;
 			out.push({ ...message, content: kept });
 			continue;
 		}
@@ -3685,7 +3710,7 @@ function countImagesDeep(blocks, depth) {
 	return n;
 }
 
-function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
+function withToolImageDowngrade(adapter, isImageCapable, onDrop, isImageUsable) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
 			// `constructor` 不是要净化的方法：包一层会让
@@ -3703,6 +3728,7 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop) {
 				stats.options.allowUserImages = typeof isImageCapable === "function" ? isImageCapable(modelId) !== false : true;
 				stats.options.onDrop = typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0;
 				stats.options.model = modelId; // 探针要记录是哪个模型触发的
+				stats.options.isImageUsable = isImageUsable;
 				const patched = args.map((arg) => sanitizeHistoryDeep(arg, 0, stats));
 				// 调用级探针：无论有没有图都记一条（有上限），这样「代理到底有没有
 				// 被调用、宿主传了什么形状」不再靠推断
@@ -3847,6 +3873,25 @@ function createWorkBuddyAdapter(options) {
 			if (dropped.userImages > 0) parts.push(`${dropped.userImages} from user messages (model lacks image input)`);
 			if (dropped.historyImages > 0) parts.push(`${dropped.historyImages} from tool/assistant history (pi-ai cannot represent them)`);
 			options.ctx.logger?.info?.(`dsh-workbuddy-xdpool: ${parts.join("; ")} (model ${modelId})`);
+		}, (ref) => {
+			/**
+			* 附件**文件**是否真的可读 —— 用宿主附件服务的 `imageHostPath`。
+			*
+			* 块上的 width/height 可能是陈旧的（附件早被清理、元数据还留着）。
+			* 实测本机 `~/.dsh/attachments/v1/files/` 只剩一个 txt，截图原文件
+			* 早已不在；此时块上元数据看着完好，pi-ai 去读却读不到，上游报
+			*「Image request width must be a positive integer」。
+			*
+			* 判不出来（服务缺失/抛错）时返回 true —— 宽松方向，宁可让宿主
+			* 报它自己的错，也不要误杀用户刚发的图。
+			*/
+			try {
+				const attachments = options.ctx.get("attachments");
+				if (attachments === void 0 || typeof attachments.imageHostPath !== "function") return true;
+				return attachments.imageHostPath(ref) !== void 0;
+			} catch {
+				return true;
+			}
 		}),
 		buildModels,
 		defaultEffort,

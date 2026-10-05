@@ -3,6 +3,69 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.36] - 2026-10-05
+
+### 修复：块上元数据完好、但附件文件已丢失的图片（第五层）
+
+用户换模型对照（Space-Bunny → DeepSeek V4.1 Flash）后错误不变 ——
+排除了「图像模型特有」的假设，同时说明问题与模型无关。
+
+调用探针给出关键差异：`messages:2320 images=2` —— 请求**仍带 2 张图**，
+但它们**没被降级**（`image-downgrade.log` 无新增）。原因是那 2 张图块上
+`width/height` 完好，通过了 v2.0.34 的尺寸检查。
+
+而实地核查 `~/.dsh/attachments/v1/files/` **只剩一个 txt** —— 截图原文件
+早已被清理。**块上的元数据是陈旧的**：尺寸看着合法，pi-ai 去读文件却读不到，
+上游照样报「Image request width must be a positive integer」。
+
+### 修法：用宿主附件服务判定「文件是否真的可读」
+
+`withToolImageDowngrade` 新增第 4 个参数 `isImageUsable(ref)`，由
+`options.ctx.get("attachments").imageHostPath(ref)` 实现（返回 undefined
+即文件不存在）。净化时两层检查缺一不可：
+
+1. 块上 `width/height` 合法（pi-ai 靠它拼 `request preview WxHpx`）
+2. **附件文件真的可读**（元数据可能陈旧）
+
+判不出来（服务缺失/抛错）时按「可用」处理 —— 宽松方向，宁可让宿主报
+它自己的错，也不要误杀用户刚发的图。
+
+### 测试
+
+- `test/tool-image-downgrade-test.mjs` 26 项：新增 1 项覆盖三种情形
+  （文件不可读被剔除、判定器抛错按可用处理、未提供判定器行为不变）
+
+## [2.0.35] - 2026-10-05
+
+### 新增：shim 兜底请求日志（确认请求是否真的到达）
+
+`upstream-request-shape.log` 与 `upstream-errors.log` 始终没被创建，
+说明 `chatCompletions` 从未执行 —— 于是「请求是否到达 shim」从假设
+变成了必须观测的事实。
+
+新增 `shim-requests.log`：记录**所有**到达 shim 的请求（方法 + 路径，
+含 query），位置在 Origin/Authorization 校验之后、路由匹配之前。
+
+## [2.0.34] - 2026-10-05
+
+### 修复：失效附件（缺尺寸）被剔除 —— 第四层
+
+用户复现后实测：请求是 `messages:2311 images=2`，不是上一轮以为的 `images=0`。
+漏看的是「保留窗口内 user 图」那一支 —— 它直接 `push` 原消息、**完全绕过降级**。
+
+真因：图片块自带 `attachment.width/height`，pi-ai 据此拼出
+「request preview WxHpx」发给模型（`requestImageHandleText`）。附件被清理后
+这两个字段缺失或为 0，上游解析这句**说明文字**时报错。
+
+修法：保留分支改为**逐块检查尺寸元数据**，无效的替换为
+「[图片未发送：附件已失效]」；有效图照常走 pi-ai 附件路径。
+
+### 流程反省（连续漏提交两次）
+
+profile 是**链接**指向开发目录，因此「改完文件」不等于「运行中的 DSH 会跑新代码」
+—— 未提交虽然文件已变，但一旦我以为「已提交」就会误判排查结果。
+v2.0.33 与 v2.0.34 连续两次改完忘记提交，均已在后续补上。
+
 ## [2.0.33] - 2026-10-05
 
 ### 诊断：把「Image request width must be a positive integer」定位到上游

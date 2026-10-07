@@ -3793,7 +3793,7 @@ function rotateProbeFile(file) {
 		writeFileSync(file, lines.slice(-PROBE_KEEP_LINES).join("\n") + "\n");
 	} catch {}
 }
-function logAdapterInvocation(property, args, found, imgCount) {
+function logAdapterInvocation(property, args, found, imgCount, imageFixes, imageFixSamples) {
 	// 「重试」不该消耗配额：同一个方法+形状重复出现只保留前若干次，
 	// 否则十秒一次的自动重试会把配额瞬间烧光。
 	if (found) {
@@ -3813,8 +3813,13 @@ function logAdapterInvocation(property, args, found, imgCount) {
 		}).join(", ");
 		const file = join(dir, "adapter-invocations.log");
 		rotateProbeFile(file);
+		// imageFixes：兜底层把多少张图的尺寸规范化成了安全整数。
+		// 这是判断「漏网图」是否存在的直接证据 —— 之前六轮都在猜哪张图没被改到。
+		const fixInfo = imageFixes
+			? " imageFixes=" + imageFixes + " fixes=[" + (imageFixSamples ?? []).join(" ") + "]"
+			: "";
 		appendFileSync(file,
-			new Date().toISOString() + " " + String(property) + "(" + summary + ") messagesFound=" + found + " images=" + imgCount + "\n");
+			new Date().toISOString() + " " + String(property) + "(" + summary + ") messagesFound=" + found + " images=" + imgCount + fixInfo + "\n");
 	} catch {}
 }
 function countImagesDeep(blocks, depth) {
@@ -3825,6 +3830,66 @@ function countImagesDeep(blocks, depth) {
 		else if (b !== null && typeof b === "object" && Array.isArray(b.content)) n += countImagesDeep(b.content, depth + 1);
 	}
 	return n;
+}
+
+/**
+ * 兜底：把整棵参数树里**所有**图片块的尺寸换成安全整数。
+ *
+ * 为什么需要这一层（这是追了六轮才补上的一环）：
+ *   downgradeUnsupportedImages 只能处理它认得的消息结构（保留窗口内的
+ *   user content、以及带 content 的容器）。真实会话（messages 2400+）
+ *   里存在它覆盖不到的位置，于是那张图**带着非整数尺寸**一路到了宿主：
+ *     宿主 requestImageDimensions 在不缩放时 `if (scale === 1) return {width,height}`
+ *     原样透传 -> validateTarget 用 Number.isSafeInteger 拒掉
+ *     -> "Image request width must be a positive integer"
+ *   症状就是「代码改了、错误一字未变」—— 因为漏网的那张图从来没被改到。
+ *
+ * 这一层不判断"该不该保留"（那是降级器的职责），只保证一件事：
+ * **凡是还留在 payload 里的图片，尺寸都是安全整数**。
+ * 原 ref 是冻结的，所以换新对象（`{...ref, width, height}`）。
+ */
+function normalizeDeepImages(value, depth, stats) {
+	if (depth > HISTORY_SCAN_MAX_DEPTH) return value;
+	if (value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) {
+		let changed = false;
+		const out = value.map((item) => {
+			const next = normalizeDeepImages(item, depth + 1, stats);
+			if (next !== item) changed = true;
+			return next;
+		});
+		return changed ? out : value;
+	}
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return value;
+
+	// 图片块：把尺寸规范成安全整数
+	if (value.type === "image" && value.attachment !== null && typeof value.attachment === "object") {
+		const ref = value.attachment;
+		const size = readImageSize(ref);
+		const ok = Number.isSafeInteger(size.width) && Number.isSafeInteger(size.height);
+		if (!ok) return value; // 尺寸读不出来 -> 交给降级器判掉，这里不动
+		if (ref.width === size.width && ref.height === size.height) return value; // 已合规
+		if (stats) {
+			stats.imageFixes = (stats.imageFixes ?? 0) + 1;
+			stats.imageFixSamples = stats.imageFixSamples ?? [];
+			if (stats.imageFixSamples.length < 6) {
+				stats.imageFixSamples.push(
+					typeof ref.width + ":" + String(ref.width) + "x" + typeof ref.height + ":" + String(ref.height)
+					+ " -> " + size.width + "x" + size.height);
+			}
+		}
+		return { ...value, attachment: { ...ref, width: size.width, height: size.height } };
+	}
+
+	let changed = false;
+	const out = {};
+	for (const key of Object.keys(value)) {
+		const next = normalizeDeepImages(value[key], depth + 1, stats);
+		out[key] = next;
+		if (next !== value[key]) changed = true;
+	}
+	return changed ? out : value;
 }
 
 function withToolImageDowngrade(adapter, isImageCapable, onDrop, isImageUsable) {
@@ -3846,12 +3911,17 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop, isImageUsable) 
 				stats.options.onDrop = typeof onDrop === "function" ? (dropped) => onDrop(modelId, dropped) : void 0;
 				stats.options.model = modelId; // 探针要记录是哪个模型触发的
 				stats.options.isImageUsable = isImageUsable;
-				const patched = args.map((arg) => sanitizeHistoryDeep(arg, 0, stats));
+				// 净化后**再过一遍兜底**：把整棵参数树里任何还带着非整数尺寸的
+				// 图片块换成带安全整数的新对象。降级器认得的结构之外（真实会话里
+				// 确实存在）就靠这一层兜住 —— 否则那张图会带着非整数尺寸到宿主，
+				// 报 "Image request width must be a positive integer"。
+				const patched = args.map((arg) => normalizeDeepImages(sanitizeHistoryDeep(arg, 0, stats), 0, stats));
 				// 调用级探针：无论有没有图都记一条（有上限），这样「代理到底有没有
 				// 被调用、宿主传了什么形状」不再靠推断
 				try {
 					logAdapterInvocation(property, patched, stats.found,
-						patched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0));
+						patched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0),
+						stats.imageFixes, stats.imageFixSamples);
 				} catch {}
 				/**
 				* **关键（这是第四轮才找到的真正入口）**：宿主流式请求的真实路径是
@@ -3871,10 +3941,12 @@ function withToolImageDowngrade(adapter, isImageCapable, onDrop, isImageUsable) 
 						const fn = out[key];
 						out[key] = function (...innerArgs) {
 							const innerStats = { found: false, options: { ...stats.options } };
-							const innerPatched = innerArgs.map((arg) => sanitizeHistoryDeep(arg, 0, innerStats));
+							// 兜底同样要过一遍（这是真正发请求的那一层）
+							const innerPatched = innerArgs.map((arg) => normalizeDeepImages(sanitizeHistoryDeep(arg, 0, innerStats), 0, innerStats));
 							try {
 								logAdapterInvocation(property + ".<returned>." + key, innerPatched, innerStats.found,
-									innerPatched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0));
+									innerPatched.reduce((n, a) => n + (a !== null && typeof a === "object" && Array.isArray(a.messages) ? countImagesDeep(a.messages, 0) : 0), 0),
+									innerStats.imageFixes, innerStats.imageFixSamples);
 							} catch {}
 							return Reflect.apply(fn, void 0, innerPatched);
 						};
@@ -7713,4 +7785,4 @@ function apply(ctx, config = {}) {
 	});
 }
 //#endregion
-export { downgradeUnsupportedImages, readImageSize, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };
+export { downgradeUnsupportedImages, readImageSize, normalizeDeepImages, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };

@@ -10,7 +10,7 @@
  * 所以这里把「冻结对象不抛」作为一等公民来断言。
  */
 import assert from 'node:assert/strict';
-import { readImageSize, downgradeUnsupportedImages } from '../vendor/xdpool/lib/index.js';
+import { readImageSize, downgradeUnsupportedImages, normalizeDeepImages } from '../vendor/xdpool/lib/index.js';
 
 let pass = 0;
 let fail = 0;
@@ -150,6 +150,49 @@ t('换出来的新 attachment 是普通可写对象（不是冻结的）', () =>
   const { block } = keepImage({ width: 1920.5, height: 1032.4 });
   assert.ok(block);
   assert.equal(Object.isFrozen(block.attachment), false, '新对象必须可写');
+});
+
+console.log('\n兜底扫描：降级器覆盖不到的位置也要修（第七层根因）');
+
+/**
+ * 为什么需要兜底：
+ *   downgradeUnsupportedImages 只认它认得的结构。真实会话（messages 2400+）
+ *   里存在它认不出的位置，那张图就带着非整数尺寸一路到了宿主 ——
+ *   所以「改了错误一字未变」。normalizeDeepImages 对整棵参数树兜底。
+ */
+t('深层嵌套（降级器不认的结构）里的图也被换成整数', () => {
+  const frozen = Object.freeze({ attachmentId: 'd'.repeat(64), mediaType: 'image/png', width: 1920.5, height: 1032.4 });
+  const deep = {
+    messages: [
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'x' }],
+        custom: { nested: { blocks: [{ type: 'image', attachment: frozen }] } },
+      },
+    ],
+  };
+  assert.equal(downgradeUnsupportedImages(deep.messages, { allowUserImages: true, keepLastMessages: 3 }), null,
+    '降级器对这种结构应无改动 —— 这就是漏网场景');
+
+  const stats = {};
+  const out = normalizeDeepImages(deep, 0, stats);
+  const img = out.messages[0].custom.nested.blocks[0];
+  assert.ok(Number.isSafeInteger(img.attachment.width), 'width 应为安全整数');
+  assert.ok(Number.isSafeInteger(img.attachment.height), 'height 应为安全整数');
+  assert.equal(img.attachment.width, 1920);
+  assert.equal(img.attachment.height, 1032);
+  assert.equal(frozen.width, 1920.5, '不许改动原冻结 ref');
+  assert.equal(stats.imageFixes, 1, '应记录修复计数（探针靠它证明漏网图存在）');
+});
+
+t('兜底对已合规的图零拷贝（返回同一对象）', () => {
+  const same = { type: 'image', attachment: Object.freeze({ width: 10, height: 20 }) };
+  assert.equal(normalizeDeepImages(same, 0, {}), same);
+});
+
+t('兜底不会改动非图片结构', () => {
+  const plain = { a: 1, b: { c: 'x' }, d: [1, 2, 3] };
+  assert.equal(normalizeDeepImages(plain, 0, {}), plain);
 });
 
 console.log(`\n结果：${pass} 通过，${fail} 失败\n`);

@@ -3,6 +3,51 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.41] - 2026-10-07
+
+### 兜底扫描：降级器覆盖不到的图片也要修（第七层）
+
+2.0.40 修好了"非整数尺寸要换成整数"，但仍然失败。查探针日志发现：
+适配器收到 `images=1`（图被保留）、却没有图被降级 —— 说明**那张图从没被
+我们的规范化碰到**。
+
+原因在 `sanitizeHistoryDeep`：
+
+```js
+if (key === "messages" && Array.isArray(item)) {
+  const next = downgradeUnsupportedImages(item, stats.options);
+  if (next !== null) { ... continue; }
+}
+```
+
+降级器只认它认得的消息结构。真实会话（`messages:2402`）里存在它**认不出**
+的位置（自定义字段、深层嵌套），`downgradeUnsupportedImages` 对那种结构
+返回 `null`（无改动）—— 于是那张图带着非整数尺寸一路到了宿主，
+`validateTarget` 报错。**这就是"代码改了、错误一字未变"的真正原因。**
+
+### 修法：加一层兜底扫描
+
+新增 `normalizeDeepImages(value, depth, stats)`，接在净化器**之后**：
+
+```js
+const patched = args.map((arg) => normalizeDeepImages(sanitizeHistoryDeep(arg, 0, stats), 0, stats));
+```
+
+- 对**整棵参数树**递归，凡是还留在 payload 里的图片块，尺寸一律换成安全整数
+- 不判断"该不该保留"（那是降级器的职责），只保证口径一致
+- 已合规零拷贝（返回同一对象）；原冻结 ref 绝不改动
+- 非图片结构原样返回
+
+### 探针增强
+
+`adapter-invocations.log` 现在会记录 `imageFixes=N fixes=[...]` ——
+直接证明"有没有漏网图、原始值是什么"。这是判断该层是否生效的唯一依据，
+不再靠推断。
+
+### 测试
+
+- 376 → **379 项**，全绿（新增 3 项覆盖兜底层）
+
 ## [2.0.40] - 2026-10-07
 
 ### 找到「Image request width must be a positive integer」的真正根因

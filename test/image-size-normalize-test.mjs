@@ -101,12 +101,55 @@ t('冻结 ref + 坏尺寸 -> 走降级（不抛、不送坏尺寸）', () => {
   assert.ok(flat.includes('图片未发送'), '应当给出明确的中文说明');
 });
 
-console.log('\n判定口径与宿主一致');
+console.log('\n核心修复：非整数尺寸必须换成整数再交给宿主');
 
-t('小数取整后能通过宿主的 isSafeInteger 校验', () => {
-  const s = readImageSize({ width: 1920.5, height: 1080.4 });
-  assert.ok(Number.isSafeInteger(s.width) && s.width > 0);
-  assert.ok(Number.isSafeInteger(s.height) && s.height > 0);
+/**
+ * 为什么这条最重要（真正的根因）：
+ *   宿主 dsh-attachment 的 requestImageDimensions 在**不需要缩放**时走
+ *     if (scale === 1) return { width, height };   // 原样透传，不取整
+ *   于是 ref.width = 1920.5 会一路带到 validateTarget，被
+ *   Number.isSafeInteger 拒掉，报
+ *     Image request width must be a positive integer
+ *   而我们这边若只 Math.floor 判定就放行，就出现「代码改了、错误一字未变」。
+ *   修法：保留时**换成带整数尺寸的新附件对象**（原 ref 冻结，改不了）。
+ */
+const keepImage = (ref) => {
+  const frozen = Object.freeze({ attachmentId: 'c'.repeat(64), mediaType: 'image/png', ...ref });
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image', attachment: frozen }] },
+  ];
+  const out = downgradeUnsupportedImages(messages, { allowUserImages: true, keepLastMessages: 3 });
+  const block = out === null ? null : (out[0].content.find((b) => b?.type === 'image') ?? null);
+  return { out, frozen, block };
+};
+
+t('非整数 float 尺寸 -> 换成安全整数', () => {
+  const { frozen, block } = keepImage({ width: 1920.5, height: 1032.4 });
+  assert.ok(block, '图不该被丢掉');
+  assert.ok(Number.isSafeInteger(block.attachment.width), 'width 必须是安全整数，实际 ' + block.attachment.width);
+  assert.ok(Number.isSafeInteger(block.attachment.height), 'height 必须是安全整数');
+  assert.equal(block.attachment.width, 1920);
+  assert.equal(block.attachment.height, 1032);
+  assert.equal(frozen.width, 1920.5, '不许改动原 ref');
+});
+
+t('字符串尺寸 -> 换成数字', () => {
+  const { block } = keepImage({ width: '1920', height: '1032' });
+  assert.ok(block, '图不该被丢掉');
+  assert.equal(block.attachment.width, 1920);
+  assert.equal(block.attachment.height, 1032);
+  assert.equal(typeof block.attachment.width, 'number');
+});
+
+t('已经是安全整数 -> 保持零拷贝（返回 null 原样）', () => {
+  const { out } = keepImage({ width: 1920, height: 1032 });
+  assert.equal(out, null, '无需修改时应返回 null，避免无谓拷贝');
+});
+
+t('换出来的新 attachment 是普通可写对象（不是冻结的）', () => {
+  const { block } = keepImage({ width: 1920.5, height: 1032.4 });
+  assert.ok(block);
+  assert.equal(Object.isFrozen(block.attachment), false, '新对象必须可写');
 });
 
 console.log(`\n结果：${pass} 通过，${fail} 失败\n`);

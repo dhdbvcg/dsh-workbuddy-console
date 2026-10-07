@@ -3,6 +3,70 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.40] - 2026-10-07
+
+### 找到「Image request width must be a positive integer」的真正根因
+
+这条报错从 2.0.31 起追了五轮都没解决，根因是**两边看的值不一样**：
+
+宿主 `@deepseek-ai/dsh-attachment` 的 `requestImageDimensions()`：
+
+```js
+const scale = Math.min(1, Math.sqrt(maxPixels / (width * height)));
+if (scale === 1) return { width, height };   // ← 不需要缩放时**原样透传**
+```
+
+**图片不需要缩放时，宿主把 `ref.width/height` 原样返回，不做取整。**
+
+于是只要附件引用上的尺寸是**非整数**（如 `1920.5`）或**字符串**（如 `"1920"`）：
+
+| 环节 | 看到的值 | 判断 |
+|---|---|---|
+| 本插件（先 `Math.floor`） | `1920` | 安全整数 → **放行** |
+| 宿主（原样透传） | `1920.5` | `Number.isSafeInteger` 不过 → **抛错** |
+
+这解释了「代码改了、错误一字未变」：我一直在改**判定**，但两边看的根本不是同一个值。
+
+### 修法：把规范化结果真正写进一个新附件对象
+
+`ref` 是冻结的（不能赋值），但**块可以换**：
+
+```js
+const normalizeImageBlock = (block) => {
+  const size = readImageSize(block.attachment);          // 取整后的安全整数
+  if (block.attachment.width === size.width && ...) return block;  // 已合法，零拷贝
+  return { ...block, attachment: { ...block.attachment, width: size.width, height: size.height } };
+};
+```
+
+- 尺寸合法但非整数 → 换成带**整数**尺寸的新 attachment（新对象不冻结）
+- 已经是整数 → 原样返回，保持零拷贝快路径（`changed=false` → 返回 `null`）
+- 读不出尺寸 → 交给 `imageOk` 降级剔除
+
+### 排查过程里的两次自我纠错
+
+1. 上一轮我断言「适配器从未被调用」——**错的**。探针目录在
+   `~/.dsh/.workbuddy-xdpool/`（`PLUGIN_DATA_DIR_NAME` 本身带点前缀，
+   中间没有 `plugin-data` 段），我查错了地方。实际日志显示
+   `messagesFound=true images=1` —— 适配器一直在工作。
+2. 我一直用"手写的等价算式"验证 `requestImageDimensions`（那份算式**总是取整**），
+   所以得出「小数没问题」的错误结论。直到读**真实实现**才看到
+   `if (scale === 1) return { width, height }` 这条短路。
+
+### 守卫
+
+`test/image-size-normalize-test.mjs`（13 项）覆盖两条独立的错误：
+
+- **冻结 ref 不能抛**（2.0.38 的事故）
+- **非整数/字符串尺寸必须换成整数**（本次根因）
+
+`scripts/prove-image-guards.mjs` 分别把代码改回这两种错误版本，
+对应测试**立刻失败**（已实测），再逐字节还原。
+
+### 测试
+
+- 373 → **376 项**，全绿
+
 ## [2.0.39] - 2026-10-07
 
 ### 紧急修复：2.0.38 把每个带图请求都弄挂了

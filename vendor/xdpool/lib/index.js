@@ -3552,6 +3552,46 @@ function downgradeUnsupportedImages(messages, options) {
 		}
 		return true;
 	};
+	/**
+	* 把图片块换成带**整数**尺寸的新对象。
+	*
+	* ── 为什么必须新建，而不是就地改 ──
+	* DSH 的附件引用是冻结的（read only），`ref.width = ...` 会抛
+	*   TypeError: Cannot assign to read only property 'width'
+	* （2.0.38 就是这么把每个带图请求弄挂的）。所以只能换一个新对象，
+	* 块本身也一起换（`{...block, attachment}`）。
+	*
+	* ── 为什么"整数"是关键（这是真正的根因）──
+	* 宿主 @deepseek-ai/dsh-attachment 的 requestImageDimensions：
+	*
+	*   const scale = Math.min(1, Math.sqrt(maxPixels / (width * height)));
+	*   if (scale === 1) return { width, height };   // ← 不缩放就原样透传
+	*   ...
+	*
+	* **图片不需要缩放时，宿主把 ref 上的尺寸原样返回，不做取整。**
+	* 于是只要 ref.width 是 1920.5 这类非整数（或 "1920" 这类字符串），
+	* 后面的 validateTarget 用 Number.isSafeInteger 校验就不过，报
+	*   Image request width must be a positive integer
+	*
+	* 而本文件这边若先 Math.floor 再判定，会把这种尺寸当成"合法"放行 ——
+	* 表现就是「代码改了，错误一字未变」，因为两边口径不一致：
+	* 我们看的是取整后的值，宿主用的是原始值。
+	*
+	* 修法：判定仍然用规范化后的值，但**保留时把规范化结果真正写进一个新
+	* 附件对象**，这样宿主读到的就是整数。
+	*
+	* @returns 需要修正时返回新块，否则原样返回（保持零拷贝快路径）
+	*/
+	const normalizeImageBlock = (block) => {
+		if (block?.type !== "image") return block;
+		const ref = block?.attachment ?? {};
+		const size = readImageSize(ref);
+		// 尺寸本身读不出来（缺失/非有限）→ 交给 imageOk 判掉，不在这里修
+		if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height)) return block;
+		// 已经就是同一对整数 → 不动
+		if (ref.width === size.width && ref.height === size.height) return block;
+		return { ...block, attachment: { ...ref, width: size.width, height: size.height } };
+	};
 	// 降级是静默的（模型只会看到一行说明），所以把丢弃计数交给调用方记日志 ——
 	// 否则用户只能从「模型怎么没看见我的图」倒推这里发生过什么。
 	const dropped = { images: 0, userImages: 0, historyImages: 0, sites: [], roles: [], model: void 0 };
@@ -3576,7 +3616,16 @@ function downgradeUnsupportedImages(messages, options) {
 			const hasAnyImage = message.content.some((b) => b?.type === "image");
 			const allValid = message.content.every((b) => (b?.type !== "image" ? true : imageOk(b)));
 			if (allValid) {
-				out.push(message);
+				// 尺寸合法，但可能**不是整数**（宿主不缩放时会原样透传，
+				// 非整数会被它的 isSafeInteger 校验拒掉）。需要时就换新块。
+				const normalized = message.content.map(normalizeImageBlock);
+				const needsFix = normalized.some((b, i) => b !== message.content[i]);
+				if (needsFix) {
+					changed = true;
+					out.push({ ...message, content: normalized });
+				} else {
+					out.push(message);
+				}
 				continue;
 			}
 			// 有失效图 -> 逐块剔除，其余内容原样
@@ -3585,7 +3634,9 @@ function downgradeUnsupportedImages(messages, options) {
 				if (block?.type !== "image") { kept.push(block); continue; }
 				// 逐块判断：可用的**照常保留**（走 pi-ai 附件路径），只剔除失效的
 				if (imageOk(block)) {
-					kept.push(block);
+					const nb = normalizeImageBlock(block);
+					if (nb !== block) changed = true;
+					kept.push(nb);
 					continue;
 				}
 				changed = true;

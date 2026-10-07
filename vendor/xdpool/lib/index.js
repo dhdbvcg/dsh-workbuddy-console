@@ -4099,44 +4099,12 @@ function createWorkBuddyAdapter(options) {
 	return {
 		providerId,
 		displayName,
-		adapter: withToolImageDowngrade(new PiAiAdapter({
+		adapter: new PiAiAdapter({
 			profiles: () => profiles,
 			auth: INERT_AUTH,
 			resolveApiKey: async () => shim.token(),
 			resolveAttachments: () => options.ctx.get("attachments"),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
-		}), (modelId) => {
-			// 判定不了就按「支持图片」处理：宿主会对未知模型报它自己的错，
-			// 而在这里猜错等于静默丢掉用户刚发的截图。
-			if (typeof modelId !== "string" || modelId === "") return true;
-			const info = catalog.find(modelId);
-			return info === void 0 || info.supportsImages === true;
-		}, (modelId, dropped) => {
-			// 降级是静默的：模型只看到一行文字说明，用户若发现「模型没看见我的图」，
-			// 至少能从日志知道这里发生过什么、丢了几张。
-			const parts = [`${dropped.images} image(s) dropped before pi-ai conversion`];
-			if (dropped.userImages > 0) parts.push(`${dropped.userImages} from user messages (model lacks image input)`);
-			if (dropped.historyImages > 0) parts.push(`${dropped.historyImages} from tool/assistant history (pi-ai cannot represent them)`);
-			options.ctx.logger?.info?.(`dsh-workbuddy-xdpool: ${parts.join("; ")} (model ${modelId})`);
-		}, (ref) => {
-			/**
-			* 附件**文件**是否真的可读 —— 用宿主附件服务的 `imageHostPath`。
-			*
-			* 块上的 width/height 可能是陈旧的（附件早被清理、元数据还留着）。
-			* 实测本机 `~/.dsh/attachments/v1/files/` 只剩一个 txt，截图原文件
-			* 早已不在；此时块上元数据看着完好，pi-ai 去读却读不到，上游报
-			*「Image request width must be a positive integer」。
-			*
-			* 判不出来（服务缺失/抛错）时返回 true —— 宽松方向，宁可让宿主
-			* 报它自己的错，也不要误杀用户刚发的图。
-			*/
-			try {
-				const attachments = options.ctx.get("attachments");
-				if (attachments === void 0 || typeof attachments.imageHostPath !== "function") return true;
-				return attachments.imageHostPath(ref) !== void 0;
-			} catch {
-				return true;
-			}
 		}),
 		buildModels,
 		defaultEffort,

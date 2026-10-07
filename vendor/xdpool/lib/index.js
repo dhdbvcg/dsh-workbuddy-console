@@ -3892,6 +3892,53 @@ function normalizeDeepImages(value, depth, stats) {
 	return changed ? out : value;
 }
 
+/**
+ * 包一层 attachments 服务，把**宿主算出来的 request-image target** 记录下来。
+ *
+ * 为什么需要这个探针：
+ *   连查六轮都以为问题在"附件引用上的尺寸"。但 2.0.41 的兜底层证明
+ *   `imageFixes` 为 0 —— 所有图的尺寸本来就是安全整数。于是怀疑转向
+ *   宿主自己算出的 target：
+ *     requestImageTarget(ref, budget) -> requestImageDimensions(ref.width, ref.height, budget.maxPixels)
+ *   若 budget.maxPixels 是 undefined，sqrt(undefined/…) = NaN，宽高都会变成
+ *   NaN，validateTarget 就报 "Image request width must be a positive integer"。
+ *
+ *   `readImageRequest(ref, target)` 是宿主唯一把 target 交出来的地方，
+ *   在这里记下它，就能直接看到 target 到底是 NaN、undefined 还是正常值 ——
+ *   不用再靠推断（前六轮都在这一点上翻车）。
+ *
+ * 只在命中时写一行；失败绝不影响请求。
+ */
+let targetProbeLines = 0;
+const TARGET_PROBE_MAX = 200;
+function wrapAttachmentsForTargetProbe(attachments) {
+	if (attachments === null || typeof attachments !== "object") return attachments;
+	if (typeof attachments.readImageRequest !== "function") return attachments;
+	const original = attachments.readImageRequest.bind(attachments);
+	const wrapped = Object.create(attachments);
+	wrapped.readImageRequest = (ref, target, signal) => {
+		try {
+			if (targetProbeLines < TARGET_PROBE_MAX) {
+				targetProbeLines += 1;
+				const dir = pluginDataDir();
+				mkdirSync(dir, { recursive: true });
+				const file = join(dir, "request-image-target.log");
+				rotateProbeFile(file);
+				const describe = (v) => (typeof v + ":" + String(v));
+				appendFileSync(file,
+					new Date().toISOString()
+					+ " refWidth=" + describe(ref?.width) + " refHeight=" + describe(ref?.height)
+					+ " targetWidth=" + describe(target?.width) + " targetHeight=" + describe(target?.height)
+					+ " maxBytes=" + describe(target?.maxBytes)
+					+ " widthIsSafeInt=" + Number.isSafeInteger(target?.width)
+					+ "\n");
+			}
+		} catch {}
+		return original(ref, target, signal);
+	};
+	return wrapped;
+}
+
 function withToolImageDowngrade(adapter, isImageCapable, onDrop, isImageUsable) {
 	return new Proxy(adapter, {
 		get(target, property, receiver) {
@@ -4047,7 +4094,7 @@ function createWorkBuddyAdapter(options) {
 			profiles: () => profiles,
 			auth: INERT_AUTH,
 			resolveApiKey: async () => shim.token(),
-			resolveAttachments: () => options.ctx.get("attachments"),
+			resolveAttachments: () => wrapAttachmentsForTargetProbe(options.ctx.get("attachments")),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
 		}), (modelId) => {
 			// 判定不了就按「支持图片」处理：宿主会对未知模型报它自己的错，

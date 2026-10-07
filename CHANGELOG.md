@@ -3,6 +3,35 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.42] - 2026-10-07
+
+### 探针：记录宿主算出的 request-image target
+
+2.0.41 的兜底层证明了一件**推翻我假设**的事：`imageFixes` 为 0 ——
+**所有图片的尺寸本来就是安全整数**。所以"非整数尺寸"不是根因，
+2.0.39/40/41 修的是真问题但都不是这一个。
+
+于是怀疑转向宿主**自己算出的 target**：
+
+```js
+requestImageTarget(ref, budget)
+  -> requestImageDimensions(ref.width, ref.height, budget.maxPixels)
+```
+
+若 `budget.maxPixels` 是 `undefined`，`Math.sqrt(undefined / ...)` = NaN，
+宽高都会变成 NaN，`validateTarget` 就报
+"Image request width must be a positive integer"。
+
+`readImageRequest(ref, target)` 是宿主唯一把 target 交出来的地方，
+本版在该处加一层包装，把 `target.width/height/maxBytes` 的真实值与类型
+写进 `request-image-target.log`。
+
+**这一步是为了停止推断**：前六轮都栽在"我以为是 A，实际是 B"。
+
+### 测试
+
+- 379 项，全绿（本版只加探针，不改行为）
+
 ## [2.0.41] - 2026-10-07
 
 ### 兜底扫描：降级器覆盖不到的图片也要修（第七层）

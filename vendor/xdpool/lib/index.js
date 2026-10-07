@@ -3447,32 +3447,28 @@ function appendImageDowngradeProbe(dropped) {
 	appendFileSync(file, line, "utf8");
 }
 /**
- * 就地规范化一张图片引用上的尺寸。
+ * 读出一张图片引用上的尺寸，规范化成安全正整数。
  *
- * 为什么要这一步（这是「粘贴截图 -> 点发送立刻报
- * Image request width must be a positive integer」的根因）：
+ * ── 为什么是「只读」而不是「就地写回」──
  *
- *   宿主在两处用了**强度不同**的校验：
- *     - 本文件的 imageOk:  Number.isFinite(w) && w > 0        （宽松）
- *     - 宿主 validateTarget: Number.isSafeInteger(w) && w > 0  （严格）
+ * 这里最初写的是 normalizeImageSize(ref)，直接 `ref.width = ...` 写回，
+ * 想借此修正宿主那边的尺寸。**那是错的，而且很危险**：
+ * DSH 的附件引用对象是**冻结的**（read-only），赋值会抛
+ *   TypeError: Cannot assign to read only property 'width' of object '#<Object>'
+ * 而这段代码在图片净化的热路径上 —— 于是**每一个带图请求都被弄挂**，
+ * 报错直接出现在对话里（用户看到的正是这句 read only property）。
  *
- *   于是「看着是有限数、但不是安全整数」的尺寸会被这里放行，宿主拿去算
- *   requestImageTarget()，最后在 validateTarget() 抛错 —— 用户只看到
- *   「本轮运行失败」，图片其实一张都没发出去。
+ * 而且写回本来就多余：宿主的 requestImageDimensions() 内部会 Math.floor，
+ * 小数尺寸它自己能处理。真正需要拦的只有**尺寸缺失/非有限**这一种。
  *
- *   实测（dsh-llm-pi-ai 的 requestImageTarget）：
- *     输入 1920.5x1080.4 -> Math.floor -> 1920x1080（合法，不会报错）
- *     输入 undefined     -> {}         （才会报错）
- *   所以真正的故障是**尺寸缺失或不是有限数**，而不是"小数"。
+ * 所以：只读、不写，返回规范化后的值；拿不到就返回 undefined，
+ * 由调用方把这张图交给降级路径（给用户一句明确说明），
+ * 而不是把坏尺寸送出去、让上游报一句看不懂的错。
  *
- * 处理（就地写回 ref，因为宿主后续直接读同一个对象）：
- *   - 已是安全正整数：原样保留
- *   - 是有限小数：取整
- *   - 缺失/非法：置为 undefined，让降级路径接管 —— 用户会看到明确的
- *     「图片未发送」说明，而不是一句上游报错。
+ * @returns {{width: number|undefined, height: number|undefined}}
  */
-function normalizeImageSize(ref) {
-	if (ref === null || typeof ref !== "object") return;
+function readImageSize(ref) {
+	if (ref === null || typeof ref !== "object") return { width: void 0, height: void 0 };
 	const pick = (...values) => {
 		for (const v of values) {
 			if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
@@ -3483,25 +3479,23 @@ function normalizeImageSize(ref) {
 		}
 		return void 0;
 	};
-	// 先看常规字段，找不到再去 dimensions / meta 这类兜底位置
-	const rawW = pick(ref.width, ref.w, ref.imageWidth,
-		ref.dimensions?.width, ref.dimensions?.w, ref.meta?.width);
-	const rawH = pick(ref.height, ref.h, ref.imageHeight,
-		ref.dimensions?.height, ref.dimensions?.h, ref.meta?.height);
+	try {
+		// 先看常规字段，找不到再去 dimensions / meta 这类兜底位置
+		const rawW = pick(ref.width, ref.w, ref.imageWidth,
+			ref.dimensions?.width, ref.dimensions?.w, ref.meta?.width);
+		const rawH = pick(ref.height, ref.h, ref.imageHeight,
+			ref.dimensions?.height, ref.dimensions?.h, ref.meta?.height);
 
-	// 两边都要有合法值。
-	//
-	// 不能"只有一边有值就按 1:1 补齐" —— 那会把坏尺寸掩盖成好尺寸
-	// （例如 width=0、height=1080 会被补成 1080x1080 从而放行），
-	// 与这次故障的根因（强度不一致导致漏网）是同一类错误。
-	// 一边不合法，就整张判定不可用，交给降级路径给用户明确提示。
-	if (rawW === void 0 || rawH === void 0) {
-		ref.width = void 0;
-		ref.height = void 0;
-		return;
+		// 两边都要有值。
+		// 不能"只有一边有值就按 1:1 补齐" —— 那会把坏尺寸掩盖成好尺寸
+		// （width=0、height=1080 会被补成 1080x1080 从而放行），
+		// 与这次故障是同一类错误。
+		if (rawW === void 0 || rawH === void 0) return { width: void 0, height: void 0 };
+		return { width: Math.max(1, Math.floor(rawW)), height: Math.max(1, Math.floor(rawH)) };
+	} catch {
+		// 只读/带 getter 的怪对象：一律当作"读不到尺寸"，交给降级处理
+		return { width: void 0, height: void 0 };
 	}
-	ref.width = Math.max(1, Math.floor(rawW));
-	ref.height = Math.max(1, Math.floor(rawH));
 }
 
 function downgradeUnsupportedImages(messages, options) {
@@ -3537,14 +3531,21 @@ function downgradeUnsupportedImages(messages, options) {
 	*/
 	const imageOk = (block) => {
 		const ref = block?.attachment ?? {};
-		// 先规范化，再判定。
+		// 用 readImageSize 判定，**不改动 ref**。
 		//
-		// 顺序很重要：这里原本直接用 Number.isFinite 判定，而宿主用
-		// Number.isSafeInteger —— 强度差会让「尺寸看着有效、实际无效」的图
-		// 漏过去，最终在上游报 "Image request width must be a positive integer"。
-		// 规范化后两者口径一致（都看安全正整数），漏网之鱼就没有了。
-		normalizeImageSize(ref);
-		const sized = Number.isSafeInteger(ref.width) && ref.width > 0 && Number.isSafeInteger(ref.height) && ref.height > 0;
+		// 为什么强调"不改动"：DSH 的附件引用是冻结的，任何赋值都会抛
+		//   TypeError: Cannot assign to read only property 'width'
+		// 这个函数在净化热路径上，一抛就是**每个带图请求都失败** ——
+		// 实测踩过（用户在对话里直接看到这句报错）。
+		//
+		// 判定口径与宿主对齐（安全正整数）：宿主 validateTarget 用
+		// Number.isSafeInteger，这里若用 Number.isFinite 就会放行
+		// 「看着有效、实际无效」的尺寸，最后在上游报
+		// "Image request width must be a positive integer"。
+		const size = readImageSize(ref);
+		const sized =
+			Number.isSafeInteger(size.width) && size.width > 0 &&
+			Number.isSafeInteger(size.height) && size.height > 0;
 		if (!sized) return false;
 		if (typeof options?.isImageUsable === "function") {
 			try { return options.isImageUsable(ref) !== false; } catch { return true; }
@@ -7661,4 +7662,4 @@ function apply(ctx, config = {}) {
 	});
 }
 //#endregion
-export { downgradeUnsupportedImages, normalizeImageSize, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };
+export { downgradeUnsupportedImages, readImageSize, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };

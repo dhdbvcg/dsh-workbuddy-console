@@ -3,6 +3,70 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.39] - 2026-10-07
+
+### 紧急修复：2.0.38 把每个带图请求都弄挂了
+
+**2.0.38 是我的错，必须先说清楚。**
+
+那个版本里我写了 `normalizeImageSize(ref)`，直接 `ref.width = ...` **就地写回**。
+而 DSH 的附件引用对象是**冻结的**（read-only），赋值会抛：
+
+```
+TypeError: Cannot assign to read only property 'width' of object '#<Object>'
+```
+
+这段代码在图片净化的**热路径**上，于是**每一个带图请求都失败**，
+用户直接在对话里看到「本轮运行失败 ...read only property 'width'」。
+
+而且这个写回**从一开始就是多余的**：宿主的 `requestImageDimensions()`
+内部会 `Math.floor`，小数尺寸它自己能处理。真正需要拦的只有
+**尺寸缺失/非有限**这一种情况 —— 那种情况靠"丢弃这张图"就能解决，
+根本不需要改动对象。
+
+### 修法
+
+把 `normalizeImageSize(ref)`（会写）换成 `readImageSize(ref)`（只读）：
+
+```js
+function readImageSize(ref) {
+  // …只读取 + 计算，绝不赋值
+  return { width: Math.max(1, Math.floor(rawW)), height: Math.max(1, Math.floor(rawH)) };
+}
+```
+
+- 不碰 ref → 冻结对象也不会抛
+- 外层再包 `try/catch` → 连带 getter 的怪对象也安全
+- `imageOk` 用它的返回值判定，口径仍是 `Number.isSafeInteger`（与宿主一致）
+- 判不出来 → 返回 `false`，交给降级路径给用户「图片未发送」的明确说明
+
+### 守卫（这次是给我自己写的）
+
+`test/image-size-normalize-test.mjs` 把「冻结对象不能抛」作为一等公民：
+
+- `readImageSize` 对冻结对象不抛
+- `downgradeUnsupportedImages` 对冻结 ref 不抛（端到端）
+- 冻结 ref + 坏尺寸 → 走降级（不抛、不把坏尺寸送出去）
+
+并附 `scripts/prove-frozen-ref-guard.mjs`：把代码改回"写回"版本，
+该测试**立刻失败**（已实测）。这条守卫就是防止我再犯同一个错。
+
+### 关于「Image request width must be a positive integer」
+
+这条原始报错**仍未定位到确定根因**。已排除的：
+
+- 不是预算字段名问题（`requestImagePixelBudget` → `maxPixels` 映射正确，值也在）
+- 不是"模型不支持图片"（17 个模型里 16 个支持，启用的 4 个都在 `imageModelIds` 里）
+- 不是小数尺寸（宿主 `requestImageDimensions` 内部会取整）
+
+现在有了 `readImageSize` 的严格判定，**尺寸确实无效的图会被降级拦下**
+（用户看到「图片未发送」而不是上游报错）。若仍出现那条报错，
+说明尺寸在插件判定之后、宿主使用之前被改动 —— 属于宿主侧行为。
+
+### 测试
+
+- 372 → **373 项**，全绿
+
 ## [2.0.38] - 2026-10-05
 
 ### 修复：粘贴截图后点发送报「Image request width must be a positive integer」

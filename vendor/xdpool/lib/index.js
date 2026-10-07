@@ -3434,7 +3434,7 @@ function appendImageDowngradeProbe(dropped) {
 	const dir = pluginDataDir();
 	const file = path.join(dir, "image-downgrade.log");
 	const sites = dropped.sites.map((s) => `${s.role}x${s.count}@depth${s.depth.join("/")}`).join(" ");
-	const line = `${new Date().toISOString()} model=${dropped.model ?? "?"} images=${dropped.images} sites=${sites || "?"}\n`;
+	const line = `${new Date().toISOString()} model=${dropped.model ?? "?"} images=${dropped.images} sites=${sites || "?"} reasons=[${(dropped.reasons ?? []).join(" ; ")}]\n`;
 	mkdirSync(dir, { recursive: true });
 	// 轮换：超过 256KB 就只留最后 64KB，避免无上限增长
 	try {
@@ -3689,6 +3689,18 @@ function downgradeUnsupportedImages(messages, options) {
 			out.push(message);
 			continue;
 		}
+		// 记录**为什么**走到"整条替换"这一支 —— 这是排查"图为什么发不出去"的关键：
+		//   allowUserImages=false -> 判定该模型不支持图片输入（isImageCapable 返回 false）
+		//   index<keepFrom        -> 图片在保留窗口之外（旧消息）
+		// 之前只有计数、没有原因，只能靠推断（踩过很多次）。
+		dropped.reasons = dropped.reasons ?? [];
+		dropped.reasons.push(
+			"role=" + String(message.role)
+			+ " index=" + index + "/" + messages.length
+			+ " keepFrom=" + keepFrom
+			+ " allowUserImages=" + allowUserImages
+			+ " why=" + (!allowUserImages ? "modelLacksImage" : (index < keepFrom ? "outOfWindow" : "unexpected"))
+			+ " count=" + probe.count);
 		changed = true;
 		dropped.images += probe.count;
 		dropped.sites.push({ role: String(message.role), count: probe.count, depth: [...new Set(dropped.roles)] });

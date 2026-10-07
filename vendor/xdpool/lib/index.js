@@ -4103,7 +4103,7 @@ function createWorkBuddyAdapter(options) {
 			profiles: () => profiles,
 			auth: INERT_AUTH,
 			resolveApiKey: async () => shim.token(),
-			resolveAttachments: () => options.ctx.get("attachments"),
+			resolveAttachments: () => wrapAttachmentsForTargetProbe(options.ctx.get("attachments")),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
 		}),
 		buildModels,

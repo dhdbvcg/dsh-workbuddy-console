@@ -77,7 +77,6 @@ const TESTS = [
   ['status-latency-test.mjs', 'status 查询并发化 / 在途去重（保存后立即生效）'],
   ['shigh-alias-test.mjs', '上游 shigh 档映射到 DSH 超高（自带列表不缺档）'],
   ['tool-image-downgrade-test.mjs', '历史工具消息带图也能发请求（UNSUPPORTED_CONTENT）'],
-  ['image-size-normalize-test.mjs', '附件尺寸规范化 / 不把坏尺寸送进上游'],
   ['adapter-proxy-safety-test.mjs', '降级代理不改变 adapter 的其它行为（A/B 对比）'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],

@@ -10,7 +10,7 @@
  * 所以这里把「冻结对象不抛」作为一等公民来断言。
  */
 import assert from 'node:assert/strict';
-import { readImageSize, downgradeUnsupportedImages, normalizeDeepImages } from '../vendor/xdpool/lib/index.js';
+import { readImageSize, downgradeUnsupportedImages, normalizeDeepImages, policyToHostTarget } from '../vendor/xdpool/lib/index.js';
 
 let pass = 0;
 let fail = 0;
@@ -193,6 +193,47 @@ t('兜底对已合规的图零拷贝（返回同一对象）', () => {
 t('兜底不会改动非图片结构', () => {
   const plain = { a: 1, b: { c: 'x' }, d: [1, 2, 3] };
   assert.equal(normalizeDeepImages(plain, 0, {}), plain);
+});
+
+console.log('\n最终根因：0.1.5 的 policy 必须转成 0.2.0 的 target');
+
+/**
+ * 我们 vendored 的代码加载的是 dsh-llm-pi-ai 0.1.5（全局 npm 那份），
+ * 它调用 readImageRequest(ref, policy)，policy = {maxPixels, maxBytes}；
+ * 而宿主的 dsh-attachment-local 是 0.2.0，签名是 (ref, target)，
+ * target 必须是 {width, height, maxBytes} —— 于是 validateTarget 报
+ * "Image request width must be a positive integer"。
+ * 这是「无法给 WorkBuddy 模型发图片」的真正根因（官方模型走 deepseek 适配器，
+ * 签名一致，所以能识图）。
+ */
+t('policy {maxPixels,maxBytes} -> 带安全整数宽高的 target', () => {
+  const t = policyToHostTarget({ width: 217, height: 58 }, { maxPixels: 4194304, maxBytes: 1048576 });
+  assert.ok(Number.isSafeInteger(t.width) && t.width > 0, 'width 必须是安全正整数，实际 ' + t.width);
+  assert.ok(Number.isSafeInteger(t.height) && t.height > 0, 'height 必须是安全正整数');
+  assert.equal(t.width, 217);
+  assert.equal(t.height, 58);
+  assert.equal(t.maxBytes, 1048576);
+});
+
+t('超出像素预算的大图按同几何缩放', () => {
+  const t = policyToHostTarget({ width: 4000, height: 3000 }, { maxPixels: 4194304, maxBytes: 1048576 });
+  assert.ok(Number.isSafeInteger(t.width) && Number.isSafeInteger(t.height));
+  assert.ok(t.width * t.height <= 4194304, '缩放后不应超预算，实际 ' + t.width * t.height);
+});
+
+t('已经是合法 target 时原样返回（不重复转换）', () => {
+  const already = { width: 217, height: 58, maxBytes: 99 };
+  assert.equal(policyToHostTarget({ width: 217, height: 58 }, already), already);
+});
+
+t('不像 policy 的参数原样返回（不猜）', () => {
+  const weird = { foo: 1 };
+  assert.equal(policyToHostTarget({ width: 217, height: 58 }, weird), weird);
+});
+
+t('引用上没有尺寸时不硬造 target', () => {
+  const weird = { maxPixels: 4194304, maxBytes: 1048576 };
+  assert.equal(policyToHostTarget({}, weird), weird, '读不到尺寸应原样放行，交给宿主报自己的错');
 });
 
 console.log(`\n结果：${pass} 通过，${fail} 失败\n`);

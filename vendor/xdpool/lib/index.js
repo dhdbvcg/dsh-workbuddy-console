@@ -3893,19 +3893,75 @@ function normalizeDeepImages(value, depth, stats) {
 }
 
 /**
- * 包一层 attachments 服务，把**宿主算出来的 request-image target** 记录下来。
+ * 把 0.1.5 的 "policy" 参数转换成 0.2.0 宿主期望的 "target"。
  *
- * 为什么需要这个探针：
- *   连查六轮都以为问题在"附件引用上的尺寸"。但 2.0.41 的兜底层证明
- *   `imageFixes` 为 0 —— 所有图的尺寸本来就是安全整数。于是怀疑转向
- *   宿主自己算出的 target：
- *     requestImageTarget(ref, budget) -> requestImageDimensions(ref.width, ref.height, budget.maxPixels)
- *   若 budget.maxPixels 是 undefined，sqrt(undefined/…) = NaN，宽高都会变成
- *   NaN，validateTarget 就报 "Image request width must be a positive integer"。
+ * ── 这是「无法给 WorkBuddy 模型发图片」的最终根因 ──
  *
- *   `readImageRequest(ref, target)` 是宿主唯一把 target 交出来的地方，
- *   在这里记下它，就能直接看到 target 到底是 NaN、undefined 还是正常值 ——
- *   不用再靠推断（前六轮都在这一点上翻车）。
+ * 我们 vendored 的代码 import 的是 `@deepseek-ai/dsh-llm-pi-ai`，
+ * 而它解析到的是**另一个 dsh 安装**（全局 npm 装的 0.1.5-rc.3），
+ * 宿主运行时却是 0.2.0-rc.2。两版的附件接口不同：
+ *
+ *   0.1.5:  attachments.readImageRequest(ref, policy)   // policy = {maxPixels, maxBytes}
+ *   0.2.0:  attachments.readImageRequest(ref, target)   // target = {width, height, maxBytes}
+ *
+ * 于是 0.1.5 把 policy 传给了 0.2.0 的实现，宿主的 validateTarget 去校验
+ * `target.width` —— 那是 undefined —— 抛
+ *   Image request width must be a positive integer
+ *
+ * 探针实测印证：refWidth=217 refHeight=58（引用尺寸完全正常），
+ * 而 target 上只有 maxBytes、没有 width/height。
+ *
+ * 另外两个佐证：
+ *   - 官方模型走宿主的 dsh-llm-deepseek（0.2.0），签名一致 → 能识图
+ *   - 0.1.5 的 dsh-llm-pi-ai 里**根本没有 requestImageTarget /
+ *     requestImageDimensions**（那是 0.2.0 才有的），所以它必然传的是 policy
+ *
+ * 修法：在这一层把 policy 换算成 target（几何与宿主 requestImageDimensions 一致）。
+ * 比换依赖版本安全得多 —— 不动 node_modules，也不依赖 asar 加载。
+ */
+function policyToHostTarget(ref, arg) {
+	if (arg === null || typeof arg !== "object") return arg;
+	// 已经是合法 target（0.2.0 签名）：原样放行
+	if (Number.isSafeInteger(arg.width) && arg.width > 0 && Number.isSafeInteger(arg.height) && arg.height > 0) return arg;
+	// 不像 policy：不猜，原样放行
+	if (!Number.isFinite(arg.maxPixels) && !Number.isFinite(arg.maxBytes)) return arg;
+
+	const w = Number(ref?.width);
+	const h = Number(ref?.height);
+	// 引用上读不到尺寸时不硬造：交给宿主报它自己的错，避免我们掩盖问题
+	if (!Number.isFinite(w) || w <= 0 || !Number.isFinite(h) || h <= 0) return arg;
+
+	const maxPixels = Number.isFinite(arg.maxPixels) && arg.maxPixels > 0 ? arg.maxPixels : 4194304;
+	const maxBytes = Number.isFinite(arg.maxBytes) && arg.maxBytes > 0 ? arg.maxBytes : 1048576;
+
+	// 与宿主 dsh-attachment 的 requestImageDimensions 同几何：
+	// 等比缩进像素预算，长边 floor、短边 round，再逐步回缩直到不超预算。
+	const scale = Math.min(1, Math.sqrt(maxPixels / (w * h)));
+	if (scale === 1) return { width: w, height: h, maxBytes };
+	let width;
+	let height;
+	if (w >= h) {
+		width = Math.max(1, Math.floor(w * scale));
+		height = Math.max(1, Math.round((width * h) / w));
+		while (width * height > maxPixels && width > 1) {
+			width -= 1;
+			height = Math.max(1, Math.round((width * h) / w));
+		}
+	} else {
+		height = Math.max(1, Math.floor(h * scale));
+		width = Math.max(1, Math.round((height * w) / h));
+		while (width * height > maxPixels && height > 1) {
+			height -= 1;
+			width = Math.max(1, Math.round((height * w) / h));
+		}
+	}
+	return { width, height, maxBytes };
+}
+
+/**
+ * 包一层 attachments 服务，做两件事：
+ *   1) **把 0.1.5 的 policy 参数转换成 0.2.0 的 target**（见 policyToHostTarget）
+ *   2) 记录转换前后的值，供诊断（前六轮全靠推断，栽了很多次）
  *
  * 只在命中时写一行；失败绝不影响请求。
  */
@@ -3916,8 +3972,10 @@ function wrapAttachmentsForTargetProbe(attachments) {
 	if (typeof attachments.readImageRequest !== "function") return attachments;
 	const original = attachments.readImageRequest.bind(attachments);
 	const wrapped = Object.create(attachments);
-	wrapped.readImageRequest = (ref, target, signal) => {
+	wrapped.readImageRequest = (ref, arg, signal) => {
+		let target = arg;
 		try {
+			target = policyToHostTarget(ref, arg);
 			if (targetProbeLines < TARGET_PROBE_MAX) {
 				targetProbeLines += 1;
 				const dir = pluginDataDir();
@@ -3925,16 +3983,13 @@ function wrapAttachmentsForTargetProbe(attachments) {
 				const file = join(dir, "request-image-target.log");
 				rotateProbeFile(file);
 				const describe = (v) => (typeof v + ":" + String(v));
-				// 关键区分：target 上"没有 width 这个键" vs "有键但值是 undefined"。
-				// requestImageTarget 的写法是 {...requestImageDimensions(...), maxBytes}，
-				// 而那个函数永远返回 {width,height} —— 所以若 keys 里没有 width，
-				// 说明拿到的 target 根本不来自 requestImageTarget，得换方向查。
-				const keys = target !== null && typeof target === "object" ? Object.keys(target).join("|") : "(非对象)";
+				const keys = (o) => (o !== null && typeof o === "object" ? Object.keys(o).join("|") : "(非对象)");
 				appendFileSync(file,
 					new Date().toISOString()
 					+ " refWidth=" + describe(ref?.width) + " refHeight=" + describe(ref?.height)
-					+ " targetKeys=[" + keys + "]"
-					+ " hasWidthKey=" + (target !== null && typeof target === "object" ? "width" in target : "n/a")
+					+ " argKeys=[" + keys(arg) + "]"
+					+ " converted=" + (target !== arg)
+					+ " targetKeys=[" + keys(target) + "]"
 					+ " targetWidth=" + describe(target?.width) + " targetHeight=" + describe(target?.height)
 					+ " maxBytes=" + describe(target?.maxBytes)
 					+ " widthIsSafeInt=" + Number.isSafeInteger(target?.width)
@@ -7839,4 +7894,4 @@ function apply(ctx, config = {}) {
 	});
 }
 //#endregion
-export { downgradeUnsupportedImages, readImageSize, normalizeDeepImages, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };
+export { downgradeUnsupportedImages, readImageSize, normalizeDeepImages, policyToHostTarget, withToolImageDowngrade, APPEARANCE_THEME_KEY, AUTOMATION_JOB_KINDS, AUTOMATION_TICK_MS, BUDDY_APP_ID, BUDDY_APP_NAME, Config, DEFAULT_AUTOMATION_HOURS, DEFAULT_CONTEXT_BUDGET, EVENT_SCORE_WAIT_MS, FALLBACK_WORKBUDDY_MODELS, IGNORED_FILE_NAME, LIBRARY_DOC_URL, LIGHTHOUSE_EXPERT_ID, PLAYBOOK_CASE_ID, PLAYBOOK_CASE_NAME, PLUGIN_DATA_DIR_NAME, POOL_ACCOUNT_IGNORE_PATH, POOL_AUTOMATION_RUN_PATH, POOL_CHECKIN_PATH, POOL_CREDIT_RESERVE_PATH, POOL_MODELS_SAVE_PATH, POOL_RESCAN_PATH, POOL_RESET_COOLDOWN_PATH, POOL_STATUS_PATH, SKILL_ID, SKILL_NAME, TEMPLATE_PRESETS, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_LIVE_FILENAME, WORKBUDDY_POOL_PROVIDER, WORKBUDDY_POOL_SETTINGS_NS, WorkBuddyAccountPool, WorkBuddyCatalog, WorkBuddyScheduler, WorkBuddyUpstreamClient, appearanceChain, apply, automationChain, automationOptions, buddyAppChain, buddyAppEvents, buildStatus, candidateAuthDirs, canvasChain, chatChain, classifyUpstreamError, createCore, createWorkBuddyAdapter, createWorkBuddyShim, currentApi, dayKey, defaultDesktopAuthDirs, desktopAutomationCreatedEvent, desktopCanvasEvents, desktopChatEvents, dshHome, expertActualUseEvent, expertChatEvents, expertSummonEvents, formatRates, formatStatus, ignoreAccount, ignoredIdsPath, inject, isAutomationJobKind, isFireHour, libraryReadChain, modelSelectionKeyFor, name, parseRateLimitReset, parseWorkBuddyAuth, playbookChain, pluginDataDir, poolWebStatus, readIgnoredAccounts, readIgnoredAccountsSync, registerPoolStatusRoute, setApi, skillChain, templateChain, templateChains, unignoreAccount, workbuddyAccountId, writeIgnoredAccounts };

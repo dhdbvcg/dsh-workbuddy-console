@@ -3925,9 +3925,16 @@ function wrapAttachmentsForTargetProbe(attachments) {
 				const file = join(dir, "request-image-target.log");
 				rotateProbeFile(file);
 				const describe = (v) => (typeof v + ":" + String(v));
+				// 关键区分：target 上"没有 width 这个键" vs "有键但值是 undefined"。
+				// requestImageTarget 的写法是 {...requestImageDimensions(...), maxBytes}，
+				// 而那个函数永远返回 {width,height} —— 所以若 keys 里没有 width，
+				// 说明拿到的 target 根本不来自 requestImageTarget，得换方向查。
+				const keys = target !== null && typeof target === "object" ? Object.keys(target).join("|") : "(非对象)";
 				appendFileSync(file,
 					new Date().toISOString()
 					+ " refWidth=" + describe(ref?.width) + " refHeight=" + describe(ref?.height)
+					+ " targetKeys=[" + keys + "]"
+					+ " hasWidthKey=" + (target !== null && typeof target === "object" ? "width" in target : "n/a")
 					+ " targetWidth=" + describe(target?.width) + " targetHeight=" + describe(target?.height)
 					+ " maxBytes=" + describe(target?.maxBytes)
 					+ " widthIsSafeInt=" + Number.isSafeInteger(target?.width)

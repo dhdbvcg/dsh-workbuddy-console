@@ -86,9 +86,19 @@ function accountRowPlugin(a) {
     badges += c.todayCheckedIn
       ? `<span class="badge ok">${t('pool.badges.checkedIn')}</span>`
       : `<span class="badge warn">${t('pool.badges.pending')}</span>`;
-    if (c.streakDays) badges += `<span class="badge">${t('pool.streak', { days: c.streakDays })}</span>`;
-  } else if (a.checkinError) {
-    badges += `<span class="badge bad">${t('pool.badges.checkinError')}</span>`;
+    if (c.streakDays) {
+      badges += `<span class="badge">${t('pool.streak', { days: c.streakDays })}</span>`;
+      // 本地核对：上游的连签可能把漏签日也算进去。有我们的独立核对结果时，
+      // 不一致就明确标注，避免被误导。
+      const sc = state.streakCheck && state.streakCheck[a.id];
+      if (sc && sc.suspicious && sc.localStreak !== c.streakDays) {
+        badges += `<span class="badge warn">${t('pool.streakMismatch', {
+          local: sc.localStreak, missed: (sc.missedDays || []).join(', '),
+        })}</span>`;
+      }
+    } else if (a.checkinError) {
+      badges += `<span class="badge bad">${t('pool.badges.checkinError')}</span>`;
+    }
   }
 
   let creditHtml = '';
@@ -270,6 +280,7 @@ async function load() {
     }
 
     const ov = await ovP;
+    state.streakCheck = (ov && ov.streakCheck) || null;
     if (!ov.ok) {
       flash(ov.error || t('msg.loadFailed'));
       renderAccounts(null);

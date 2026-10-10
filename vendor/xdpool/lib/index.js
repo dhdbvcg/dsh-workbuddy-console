@@ -3548,7 +3548,7 @@ function downgradeUnsupportedImages(messages, options) {
 			out.push(message);
 			continue;
 		}
-		if (message.role === "user" && allowUserImages && index >= keepFrom) {
+		if (message.role === "user" && allowUserImages) {
 			/**
 			* 保留窗口内的 user 图片，但**真的能发出去的才留**。
 			*
@@ -4099,13 +4099,13 @@ function createWorkBuddyAdapter(options) {
 	return {
 		providerId,
 		displayName,
-		adapter: new PiAiAdapter({
+		adapter: withToolImageDowngrade(new PiAiAdapter({
 			profiles: () => profiles,
 			auth: INERT_AUTH,
 			resolveApiKey: async () => shim.token(),
 			resolveAttachments: () => wrapAttachmentsForTargetProbe(options.ctx.get("attachments")),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => options.ctx.get("fs")?.processPathFromHostPath(hostPath), ref)
-		}),
+		}), () => true),
 		buildModels,
 		defaultEffort,
 		invalidate: () => {
@@ -7767,13 +7767,32 @@ function apply(ctx, config = {}) {
 			ctx.llm.registerModelDiscovery(WORKBUDDY_POOL_SETTINGS_NS, async (request) => {
 				if (request.provider !== "workbuddy-xdpool" && request.provider !== "workbuddy-xdpool-global") return [];
 				const region = request.provider === "workbuddy-xdpool-global" ? "global" : "cn";
-				return core.catalogs[region].visible().map((model) => ({
+				const rows = core.catalogs[region].visible().map((model) => ({
 					id: model.id,
 					name: model.name,
 					contextWindow: model.contextWindow,
 					maxTokens: model.maxOutputTokens,
-					inputModalities: model.supportsImages ? ["text", "image"] : ["text"]
+					// 只有**明确**标记为不支持图片时才声明纯文本。
+					//
+					// 原来写的是 `model.supportsImages ? ["text","image"] : ["text"]`
+					// —— 只要该字段不是 true（包括 undefined、或区域目录选错），
+					// 模型就被声明成纯文本，DSH 便会**静默过滤掉图片**：用户看到
+					// 「图片未发送」，模型只收到一条"内容已过滤"的提示，而**全程
+					// 没有任何报错**。这正是「池模型收不到图、官方模型正常」的原因。
+					inputModalities: model.supportsImages === false ? ["text"] : ["text", "image"]
 				}));
+				// 探针：把这次的判定结果落盘，避免再靠推断
+				// （前面十几轮都在猜"模型到底被声明成什么"）。
+				try {
+					const dir = pluginDataDir();
+					mkdirSync(dir, { recursive: true });
+					const file = join(dir, "model-discovery.log");
+					rotateProbeFile(file);
+					appendFileSync(file,
+						new Date().toISOString() + " provider=" + String(request.provider) + " region=" + region
+						+ " models=[" + rows.map((r) => r.id + ":" + (r.inputModalities.includes("image") ? "img" : "txt")).join(" ") + "]\n");
+				} catch {}
+				return rows;
 			});
 			ctx.logger.info?.(`dsh-workbuddy-xdpool: providers registered at cn=${shims.cn.baseUrl()} global=${shims.global.baseUrl()}`);
 		} catch (error) {

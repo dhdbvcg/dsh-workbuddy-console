@@ -3,6 +3,76 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.48] - 2026-10-07
+
+### 修复：重新接上 policy → target 换算（降级包装保持已拆）
+
+2.0.47 拆掉降级包装后，池里的模型仍然发不出图片。宿主的
+`dsh-attachment` 有两条**互不兼容**的调用约定：
+
+| 约定 | 传入形状 |
+|---|---|
+| 0.1.5（vendored 依赖的 pi-ai） | policy `{maxPixels, maxBytes}` |
+| 0.2.0（本机宿主） | target `{width, height, maxBytes}` |
+
+0.1.5 里**根本没有** `requestImageTarget` / `requestImageDimensions`，
+所以它必然传 policy；而宿主按 target 读 `width/height`，读到
+`undefined`，于是报 `Image request width must be a positive integer`。
+
+本版在 `readImageRequest` 这一层把 policy 换算成 target，几何与宿主
+`requestImageDimensions` 一致（等比缩进像素预算、长边 floor、短边 round、
+再逐步回缩直到不超预算）。**不动 `node_modules`，也不依赖 asar 加载** ——
+比换依赖版本安全。
+
+### 探针
+
+`request-image-target.log` 记录换算前后的值。实测：
+
+```
+argKeys=[maxPixels|maxBytes] converted=true
+targetKeys=[width|height|maxBytes]
+targetWidth=number:237 targetHeight=number:57 widthIsSafeInt=true
+```
+
+## [2.0.47] - 2026-10-07
+
+### 修复：拆掉适配器上的图片降级包装 —— 与原版 1.7.3 对齐
+
+逐项对比原版 1.7.1 / 1.7.3 后确认：原版**没有**这套包装
+（`withToolImageDowngrade` 用 Proxy 包住 adapter 的所有方法，每次调用都
+落一条 `logAdapterInvocation`），而原版反而能识图。本版把包装从注册路径上
+拆掉，回到上游原版行为。
+
+## [2.0.46] - 2026-10-07
+
+### 回退：图片路径恢复成上游原版行为
+
+2.0.38–2.0.45 对图片路径的 5 处改动全部撤掉。原版没有这些改动却能识图，
+说明问题出在这些改动本身，而不是"原版缺了什么"。
+
+## [2.0.45] - 2026-10-07
+
+### 探针：降级日志记录「图为什么被丢掉」
+
+`image-downgrade.log` 增加 `reasons` 字段，逐条记下
+`role / index / keepFrom / allowUserImages / why / count`。
+
+此前只有计数、没有原因，只能靠推断 —— 这正是前面几轮反复修错的原因。
+
+## [2.0.44] - 2026-10-07
+
+### 修复：0.1.5 的 policy 被当成 0.2.0 的 target —— 无法发图片的根因
+
+探针把「缺键」与「值为 undefined」区分开后，根因确定：宿主算出的
+`targetWidth` / `targetHeight` 是 `undefined`，因为传进去的是 policy。
+
+## [2.0.43] - 2026-10-07
+
+### 探针：区分 target 是「缺键」还是「值为 undefined」
+
+`request-image-target.log` 在原有字段上补 `argKeys` / `converted` /
+`targetKeys`，把"靠推断"变成"读文件"。
+
 ## [2.0.42] - 2026-10-07
 
 ### 探针：记录宿主算出的 request-image target

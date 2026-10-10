@@ -61,6 +61,7 @@ const STRINGS = {
     'pool.reserveLabel': ' · 保底 {value}',
     'pool.remaining': '剩余 <b>{value}</b>',
     'pool.streak': '连签 {days} 天',
+    'pool.streakMismatch': '⚠ 本地核对连签 {local} 天（漏签：{missed}）—— 上游数据未断签，请以本地为准',
     'standalone.expires': '到期：{date}',
     'pool.badges.disabled': '已禁用',
     'pool.badges.cooling': '冷却中',

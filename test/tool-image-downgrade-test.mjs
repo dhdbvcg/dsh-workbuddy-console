@@ -321,10 +321,11 @@ await t('探针文件：记录真实结构，无降级时不写', () => {
 });
 
 
-await t('旧历史里的 user 图片也降级，只留最近几条消息的（上游拒绝失效旧附件）', () => {
-  // 回归：2057 条消息、25 张历史图 —— 上游网关拒绝其中一张失效旧附件
-  //（"Image request width must be a positive integer"，文本来自上游而非本地包）。
-  // 与其逐张排查旧附件，不如只保留最近 3 条消息里的图：新截图要保，旧截图本就该弃。
+await t('旧历史里的 user 图片【不再】因位置被降级（窗口已移除，v2.0.50）', () => {
+  // 变更：原来"只保留最近 3 条消息里的图"。真实会话里模型会连续调用工具，
+  // 几次往返之后用户的截图就滑出 3 条窗口，被替换成「当前模型不支持图片输入」
+  // 的占位文字 —— 模型从此看不到那张图（这正是用户报的"无法识图"）。
+  // 现在 user 的图**不按位置丢弃**：任何位置的 user 图都保留，只剔除失效附件。
   const img = (id) => ({ type: 'image', attachment: { attachmentId: id, width: 1920, height: 1080 } });
   const messages = [
     { role: 'user', content: [img('old-1'), txt('很久以前')] },
@@ -334,12 +335,8 @@ await t('旧历史里的 user 图片也降级，只留最近几条消息的（�
     { role: 'user', content: [img('new-1'), txt('刚刚发的')] },
   ];
   const out = downgradeUnsupportedImages(messages, { allowUserImages: true });
-  // 5 条消息、keepLastMessages=3 -> 只有最后 3 条（index>=2）保留图片
-  assert.strictEqual(out[0].content.some((b) => b.type === 'image'), false, 'index0 的旧图应被降级');
-  assert.strictEqual(out[2].content.some((b) => b.type === 'image'), true, 'index2 在最后 3 条窗口内，应保留');
-  assert.strictEqual(out[4].content.some((b) => b.type === 'image'), true, '最近消息里的图必须保留');
-  // 降级说明带原因
-  assert.match(out[0].content[0].text, /不支持图片输入|图片未发送|附件已失效/, 'user 图降级应有说明');
+  // 全部有效 -> 零改动（上游原样，快路径）
+  assert.strictEqual(out, null, '所有 user 图都有效时不应有任何改动');
 });
 
 await t('尺寸元数据无效的图片（失效附件）被剔除，有效的照常保留', () => {

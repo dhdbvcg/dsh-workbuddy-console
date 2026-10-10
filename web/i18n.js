@@ -61,6 +61,7 @@ export const STRINGS = {
     'pool.reserveLabel': ' · 保底 {value}',
     'pool.remaining': '剩余 <b>{value}</b>',
     'pool.streak': '连签 {days} 天',
+    'pool.streakMismatch': '⚠ Local check: streak {local} day(s) (missed: {missed}) — upstream did not reset, trust local',
     'standalone.expires': '到期：{date}',
     'pool.badges.disabled': '已禁用',
     'pool.badges.cooling': '冷却中',
@@ -428,6 +429,7 @@ export const STRINGS = {
     'msg.operationFailed': 'Operation failed',
     'msg.dismiss': 'Dismiss',
     'msg.retry': 'Retry',
+    'pool.streakMismatch': 'Local check: streak {local} day(s), missed on {missed} — upstream did not reset, trust local',
   },
 };
 

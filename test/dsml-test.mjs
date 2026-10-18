@@ -279,6 +279,26 @@ await t('源码守卫：serveSuccessfulStream 不得给 body 挂 data 监听', (
   assert.ok(/pipeUpstreamSse\(/.test(code), '应调用 pipeUpstreamSse');
 });
 
+await t('上游回非流式 message 形状（stream=true 却给 message）→ 也翻译成 tool_calls', async () => {
+  // 这是"200、没有任何 delta、DSH 报 empty response"的另一种可能来源：
+  // pi-ai 只认 delta，原样转发 message 等于什么都没给。
+  const body = asBody([
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-test', model: 'deepseek-v4.1-flash',
+      choices: [{ index: 0, message: { role: 'assistant', content: REAL }, finish_reason: 'stop' }],
+    }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const res = fakeRes();
+  await pipeUpstreamSse(body, res, null, { randomId: () => 'fixed' });
+  const events = res.events();
+  const text = events.map((e) => e?.choices?.[0]?.delta?.content ?? '').join('');
+  assert.ok(!text.includes('DSML'), '正文不能漏出 DSML');
+  assert.equal(events.flatMap((e) => e?.choices?.[0]?.delta?.tool_calls ?? []).length, 1, '应翻译出 1 个调用');
+  const finish = events.filter((e) => e?.choices?.[0]?.finish_reason).map((e) => e.choices[0].finish_reason);
+  assert.deepEqual(finish, ['tool_calls']);
+});
+
 for (const [tag, name, err] of rows) {
   console.log('  ' + tag + ' ' + name + (err ? '\n         ' + err : ''));
 }

@@ -6317,7 +6317,7 @@ async function serveSuccessfulStream(res, account, result, logger, refreshBalanc
 				mkdirSync(dir, { recursive: true });
 				const file = join(dir, "dsml-rewrite.log");
 				rotateProbeFile(file);
-				appendFileSync(file, new Date().toISOString() + " account=" + account.id + " model=" + String(result.model ?? "?") + " calls=" + info.calls + " textDeltas=" + info.textDeltas + " finish=" + info.finish + " upstreamDone=" + info.upstreamDone + "\n");
+				appendFileSync(file, new Date().toISOString() + " account=" + account.id + " model=" + String(result.model ?? "?") + " events=" + info.events + " calls=" + info.calls + " textDeltas=" + info.textDeltas + " finish=" + info.finish + " upstreamDone=" + info.upstreamDone + "\n" + (info.samples ?? []).map((s) => "    raw: " + s.replace(/\n/gu, "\\n") + "\n").join(""));
 			} catch {}
 		}
 	});

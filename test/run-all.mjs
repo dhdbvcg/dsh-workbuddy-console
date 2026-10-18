@@ -80,6 +80,7 @@ const TESTS = [
   ['adapter-proxy-safety-test.mjs', '降级代理不改变 adapter 的其它行为（A/B 对比）'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
   ['peer-compat-test.mjs', '宿主版本兼容 / peer 范围涵盖当前 DSH 运行时'],
+  ['dsml-test.mjs', 'DSML 工具调用解析 / 流式改写 / 分块安全 / 不丢数据'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
   ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / Max 模式开关 / 保存回写'],
 ];

@@ -11,6 +11,10 @@ import { resolveImageAttachmentAccess, resolveRetryPolicy } from "@deepseek-ai/d
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
+// DSML 工具调用归一化：WorkBuddy 网关对部分新模型不返回结构化 tool_calls，
+// 而是把 DSML 写进正文，DSH 于是把工具调用当普通文本渲染出来、工具不执行。
+// 这里复用插件根目录那份经过测试的解析器（lib/dsml.mjs）。
+import { pipeUpstreamSse } from "../../../lib/dsml.mjs";
 //#region src/upstream.ts
 /** CN chat base per dingminhua's on-machine probe (HTTP 200 for chat/models). */
 const CN_CHAT_BASE = "https://copilot.tencent.com";
@@ -6308,7 +6312,7 @@ async function serveSuccessfulStream(res, account, result, logger, refreshBalanc
 		logger?.warn("dsh-workbuddy-xdpool: upstream stream failed mid-flight", error);
 		if (!sawDone && res.writable) res.end("data: [DONE]\n\n");
 	});
-	body.pipe(res);
+	await pipeUpstreamSse(body, res, logger);
 }
 /**
 * Compact an over-long conversation and retry it once.

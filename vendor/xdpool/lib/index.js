@@ -6303,16 +6303,24 @@ async function serveSuccessfulStream(res, account, result, logger, refreshBalanc
 		"Connection": "keep-alive",
 		"X-Accel-Buffering": "no"
 	});
-	let sawDone = false;
+	// 注意：这里**不能**再挂 body.on("data") —— 挂上会让流进入 flowing 模式，
+	// 与 pipeUpstreamSse 里的 `for await (const piece of body)` 抢消费，
+	// 结果是改写器几乎收不到 chunk，只剩 finish + [DONE]，DSH 便会报
+	// `returned a completed response with no content`（EMPTY_RESPONSE）。
+	// 流的错误处理与 [DONE] 收尾都交给 pipeUpstreamSse 自己完成。
 	const body = Readable.fromWeb(result.response.body);
-	body.on("data", (chunk) => {
-		if (chunk.includes("[DONE]")) sawDone = true;
+	await pipeUpstreamSse(body, res, logger, {
+		summary: (info) => {
+			// 观测：每次转发都记一行，这样"到底转出了什么"有据可查
+			try {
+				const dir = pluginDataDir();
+				mkdirSync(dir, { recursive: true });
+				const file = join(dir, "dsml-rewrite.log");
+				rotateProbeFile(file);
+				appendFileSync(file, new Date().toISOString() + " account=" + account.id + " model=" + String(result.model ?? "?") + " calls=" + info.calls + " textDeltas=" + info.textDeltas + " finish=" + info.finish + " upstreamDone=" + info.upstreamDone + "\n");
+			} catch {}
+		}
 	});
-	body.on("error", (error) => {
-		logger?.warn("dsh-workbuddy-xdpool: upstream stream failed mid-flight", error);
-		if (!sawDone && res.writable) res.end("data: [DONE]\n\n");
-	});
-	await pipeUpstreamSse(body, res, logger);
 }
 /**
 * Compact an over-long conversation and retry it once.

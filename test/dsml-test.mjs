@@ -7,6 +7,9 @@
  * （块没闭合时必须原样发出，绝不能吞掉内容）。
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { Readable } from 'node:stream';
 import { parseDsmlCalls, hasDsml, DsmlStreamRewriter, DSML_START, DSML_END, pipeUpstreamSse } from '../lib/dsml.mjs';
 
 let total = 0;
@@ -240,6 +243,40 @@ await t('流式改造：DSML 未闭合（上游截断）→ 原样作为正文�
   assert.ok(text.includes('前缀'), '前面的正文要保留');
   assert.ok(text.includes('invoke name="pwsh"'), '未闭合的块必须原样发出：' + JSON.stringify(text.slice(-80)));
   assert.equal(events.some((e) => e?.choices?.[0]?.delta?.tool_calls), false, '不应凭空产出调用');
+});
+
+await t('能消费真正的 Node Readable（与 Readable.fromWeb 同形态）', async () => {
+  // 回归：真实上游体是 Readable（fromWeb）。若调用方在同一个流上再挂
+  // body.on("data")，流会进入 flowing 模式、与 pipeUpstreamSse 的
+  // `for await` 抢消费，结果只剩 finish + [DONE] —— DSH 报
+  // `returned a completed response with no content`(EMPTY_RESPONSE)。
+  const pieces = [];
+  for (let i = 0; i < REAL.length; i += 11) pieces.push(REAL.slice(i, i + 11));
+  const body = Readable.from(sseChunks(pieces).map((s) => Buffer.from(s)));
+  const res = fakeRes();
+  await pipeUpstreamSse(body, res, null, { randomId: () => 'fixed' });
+  const events = res.events();
+  assert.equal(events.flatMap((e) => e?.choices?.[0]?.delta?.tool_calls ?? []).length, 1, 'Readable 上也要解析出 1 个调用');
+});
+
+await t('源码守卫：serveSuccessfulStream 不得给 body 挂 data 监听', () => {
+  const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  const vendor = path.resolve(here, '..', 'vendor', 'xdpool', 'lib', 'index.js');
+  const src = fs.readFileSync(vendor, 'utf8');
+  const at = src.indexOf('async function serveSuccessfulStream(');
+  assert.ok(at > 0, '找不到 serveSuccessfulStream');
+  let i = src.indexOf('{', at);
+  let depth = 0;
+  let end = -1;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const body = src.slice(at, end + 1);
+  // 先剥掉行注释，否则守卫会被"不能挂 body.on(data)"这类说明文字误伤
+  const code = body.split('\n').map((l) => l.replace(/\/\/.*$/u, '')).join('\n');
+  assert.ok(!/body\.on\(\s*["']data["']/.test(code), '不能再给 body 挂 data 监听（会与 for await 抢消费）');
+  assert.ok(/pipeUpstreamSse\(/.test(code), '应调用 pipeUpstreamSse');
 });
 
 for (const [tag, name, err] of rows) {

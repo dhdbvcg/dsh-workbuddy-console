@@ -50,12 +50,28 @@ await t('扫描到本机凭证文件', () => {
   assert.ok(files.length > 0, '应至少扫到一个凭证文件');
 });
 
-await t('每个文件都带 kind / path / accessToken 字段', () => {
+await t('每个文件都带 kind / path / accessToken 字段（明文或 $wbEncrypted 信封）', () => {
+  // WorkBuddy 桌面端 5.6.2 起把凭证字段**加密**存储：
+  //   accessToken / refreshToken / nickname 变成
+  //   { "$wbEncrypted": 1, "envelope": "<base64 的 sym-v1 信封>" }
+  // 所以"accessToken 必须是字符串"这个断言已不成立 —— 明文（老快照）和
+  // 加密信封（新版 live 文件）都是正常形态。
   const files = ac.scanCredentialFiles();
+  const isEnvelope = (v) =>
+    v !== null && typeof v === 'object' && v.$wbEncrypted === 1 && typeof v.envelope === 'string';
   for (const f of files) {
     assert.ok(['live', 'snapshot'].includes(f.kind), 'kind 非法: ' + f.kind);
     assert.ok(typeof f.path === 'string' && f.path.length > 0);
-    assert.ok(typeof f.accessToken === 'string');
+    assert.ok(
+      typeof f.accessToken === 'string' || isEnvelope(f.accessToken),
+      'accessToken 应为明文字符串或 $wbEncrypted 信封，实际是 ' + typeof f.accessToken +
+        '（值: ' + String(f.accessToken).slice(0, 60) + '）',
+    );
+    if (isEnvelope(f.accessToken)) {
+      assert.ok(f.accessToken.envelope.length > 0, '加密信封不能为空');
+    } else {
+      assert.ok(f.accessToken.length > 0, '明文 accessToken 不能为空');
+    }
   }
 });
 

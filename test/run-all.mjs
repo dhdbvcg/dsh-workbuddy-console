@@ -79,6 +79,7 @@ const TESTS = [
   ['tool-image-downgrade-test.mjs', '历史工具消息带图也能发请求（UNSUPPORTED_CONTENT）'],
   ['adapter-proxy-safety-test.mjs', '降级代理不改变 adapter 的其它行为（A/B 对比）'],
   ['manifest-guard-test.mjs', 'YAML 守卫 / JS 注释误写 / 包名解析'],
+  ['peer-compat-test.mjs', '宿主版本兼容 / peer 范围涵盖当前 DSH 运行时'],
   ['mount-browser-test.mjs', '浏览器真实挂载 / 市场UI / 选择器按钮 / jsx 契约'],
   ['model-row-browser-test.mjs', '浏览器真实渲染模型行 / Max 模式开关 / 保存回写'],
 ];
@@ -135,12 +136,28 @@ for (const f of ['cordis.patch.yml', 'README.md', 'README.en.md', 'LICENSE', 'CH
 
 // vendor/ 也要复制 —— 合并进来的 xdpool 实现由 lib/index.js 直接 import。
 // 少了它，插件入口会因为找不到 ../vendor/xdpool/lib/index.js 而加载失败。
-// node_modules 链接不复制（那是本机路径，测试环境用不到）。
+//
+// 注意 vendor/xdpool/node_modules 必须**一起带过去**（这里用 junction，不复制内容）：
+//   那个目录里放着插件的 peer 依赖（@deepseek-ai/dsh-llm、schemastery、pi-ai…）。
+//   以前可以不带，因为解析会兜到 profile 的 node_modules；现在那些副本会被
+//   DSH 重装成不匹配的版本（实测把 0.2.0 换回 0.1.x），所以依赖必须在插件
+//   自己的 vendor 里自足 —— 测试环境也必须如此，否则 "vendored 模块加载失败"。
 if (fs.existsSync(path.join(PLUGIN_DIR, 'vendor'))) {
   fs.cpSync(path.join(PLUGIN_DIR, 'vendor'), path.join(linkDir, 'vendor'), {
     recursive: true,
     filter: (src) => !src.includes(`${path.sep}node_modules`),
   });
+  const vnm = path.join(PLUGIN_DIR, 'vendor', 'xdpool', 'node_modules');
+  if (fs.existsSync(vnm)) {
+    const dest = path.join(linkDir, 'vendor', 'xdpool', 'node_modules');
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.symlinkSync(vnm, dest, 'junction');
+    } catch (e) {
+      // 建不了链接就退回复制（慢一点但能用）
+      fs.cpSync(vnm, dest, { recursive: true });
+    }
+  }
 }
 
 let total = 0;
